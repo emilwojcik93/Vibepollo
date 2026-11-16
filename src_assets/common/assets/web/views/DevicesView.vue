@@ -32,6 +32,7 @@ interface PairedDevice {
   uuid: string;
   enabled: boolean;
   allow_sleep?: boolean;
+  touch_device?: boolean;
   connected: boolean;
   perm?: number | string;
   enable_legacy_ordering?: boolean;
@@ -182,6 +183,7 @@ function normalizeDevice(device: unknown, index: number): PairedDevice {
     name: stringValue(raw.name),
     enabled: booleanValue(raw.enabled, true),
     allow_sleep: raw.allow_sleep === true,
+    touch_device: raw.touch_device === true,
     connected: booleanValue(raw.connected, false),
     last_seen:
       typeof raw.last_seen === 'number' || typeof raw.last_seen === 'string' ? raw.last_seen : null,
@@ -387,6 +389,7 @@ function draftFromDevice(device: PairedDevice): ClientDeviceDraft {
   return {
     name: device.name,
     allowSleep: device.allow_sleep === true,
+    touchDevice: device.touch_device === true,
     permissions: permissionMask(device),
     enableLegacyOrdering: device.enable_legacy_ordering !== false,
     allowClientCommands: device.allow_client_commands !== false,
@@ -639,6 +642,7 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
     uuid: device.uuid,
     name: draft.name.trim(),
     allow_sleep: draft.allowSleep,
+    touch_device: draft.touchDevice,
     perm: draft.permissions & PERMISSION_ALL,
     enable_legacy_ordering: draft.enableLegacyOrdering,
     allow_client_commands: draft.allowClientCommands,
@@ -672,6 +676,7 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
 const draftScalarKeys = [
   'name',
   'allowSleep',
+  'touchDevice',
   'permissions',
   'enableLegacyOrdering',
   'allowClientCommands',

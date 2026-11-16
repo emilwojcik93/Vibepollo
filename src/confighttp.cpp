@@ -3052,9 +3052,17 @@ namespace confighttp {
         bad_request(response, request, "allow_sleep must be a boolean");
         return;
       }
-      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled"))) {
+      if (input_tree.contains("touch_device") && !input_tree["touch_device"].is_boolean()) {
+        bad_request(response, request, "touch_device must be a boolean");
+        return;
+      }
+      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled") || input_tree.contains("touch_device"))) {
         bool updated = true;
         if (hdr_profile.has_value()) updated = nvhttp::set_client_hdr_profile(uuid, *hdr_profile);
+        if (input_tree.contains("touch_device")) {
+          output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
+          updated = output_tree["touch_device_updated"].get<bool>() && updated;
+        }
         if (input_tree.contains("allow_sleep")) {
           output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
           updated = output_tree["allow_sleep_updated"].get<bool>() && updated;
@@ -3144,6 +3152,10 @@ namespace confighttp {
       if (input_tree.contains("allow_sleep")) {
         output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
         updated = output_tree["allow_sleep_updated"].get<bool>() && updated;
+      }
+      if (input_tree.contains("touch_device")) {
+        output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
+        updated = output_tree["touch_device_updated"].get<bool>() && updated;
       }
       if (input_tree.contains("enabled")) {
         output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree["enabled"].get<bool>());

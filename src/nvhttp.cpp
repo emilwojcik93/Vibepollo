@@ -2521,6 +2521,9 @@ namespace nvhttp {
           named_cert_node["enable_legacy_ordering"] = named_cert_p->enable_legacy_ordering;
           named_cert_node["allow_client_commands"] = named_cert_p->allow_client_commands;
           named_cert_node["allow_sleep"] = named_cert_p->allow_sleep;
+          if (named_cert_p->touch_device) {
+            named_cert_node["touch_device"] = true;
+          }
           named_cert_node["always_use_virtual_display"] = named_cert_p->always_use_virtual_display;
           named_cert_node["requested_resolution_only"] = named_cert_p->requested_resolution_only;
           if (named_cert_p->prefer_10bit_sdr) {
@@ -2668,6 +2671,7 @@ namespace nvhttp {
               named_cert_p->enable_legacy_ordering = util::get_non_string_json_value<bool>(el, "enable_legacy_ordering", true);
               named_cert_p->allow_client_commands = util::get_non_string_json_value<bool>(el, "allow_client_commands", true);
               named_cert_p->allow_sleep = el.contains("allow_sleep") && el["allow_sleep"].is_boolean() && el["allow_sleep"].get<bool>();
+              named_cert_p->touch_device = el.contains("touch_device") && el["touch_device"].is_boolean() && el["touch_device"].get<bool>();
               named_cert_p->always_use_virtual_display = util::get_non_string_json_value<bool>(el, "always_use_virtual_display", false);
               named_cert_p->requested_resolution_only = util::get_non_string_json_value<bool>(el, "requested_resolution_only", false);
               named_cert_p->prefer_10bit_sdr =
@@ -4606,6 +4610,7 @@ namespace nvhttp {
         named_cert_node["enable_legacy_ordering"] = named_cert->enable_legacy_ordering;
         named_cert_node["allow_client_commands"] = named_cert->allow_client_commands;
         named_cert_node["allow_sleep"] = named_cert->allow_sleep;
+        named_cert_node["touch_device"] = named_cert->touch_device;
         named_cert_node["always_use_virtual_display"] = named_cert->always_use_virtual_display;
         named_cert_node["requested_resolution_only"] = named_cert->requested_resolution_only;
 #ifdef _WIN32
@@ -8191,6 +8196,31 @@ launch_session->exact_target_hold.reset();
       return saved;
     }
     return false;
+  }
+
+  bool set_client_touch_device(const std::string &uuid, bool touch_device) {
+    if (uuid.empty()) {
+      return false;
+    }
+
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert->uuid != uuid) {
+          continue;
+        }
+
+        named_cert->touch_device = touch_device;
+        updated = true;
+        break;
+      }
+    }
+
+    if (updated) {
+      save_state();
+    }
+    return updated;
   }
 
   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile) {

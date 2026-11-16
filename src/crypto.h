@@ -119,6 +119,8 @@ namespace crypto {
     bool prefer_10bit_sdr = false;
     bool enabled = true; // Independent access toggle; never erases Apollo permissions.
     bool allow_sleep = false; // Separate administrator opt-in, never inferred from PERM.
+    // Host-side hint for clients that cannot send a posture: size the virtual display like a tablet.
+    bool touch_device = false;
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
   };

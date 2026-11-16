@@ -330,6 +330,14 @@ namespace nvhttp {
   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile);
 
   /**
+   * @brief Persist the per-client "touch device" flag.
+   *
+   * A flagged client that sends no posture hint gets a tablet-sized virtual display.
+   * @return True if the client was found and updated.
+   */
+  bool set_client_touch_device(const std::string &uuid, bool touch_device);
+
+  /**
    * @brief Remove all paired clients.
    * @return True only when the cleared machine pairing state was persisted.
    * @examples

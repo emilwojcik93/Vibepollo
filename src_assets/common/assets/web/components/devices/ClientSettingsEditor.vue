@@ -25,6 +25,7 @@ export interface ClientCommandDraft {
 export interface ClientDeviceDraft {
   name: string;
   allowSleep: boolean;
+  touchDevice: boolean;
   permissions: number;
   enableLegacyOrdering: boolean;
   allowClientCommands: boolean;
@@ -445,6 +446,23 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
             />
             <span class="vs-switch__track" aria-hidden="true" />
             <span class="vs-sr-only">{{ t('ui.devices.editor.allow_sleep') }}</span>
+          </label>
+        </SettingRow>
+        <SettingRow
+          class="client-setting-row--switch"
+          :label="t('ui.devices.editor.touch_device')"
+          :description="t('ui.devices.editor.touch_device_description')"
+          :control-id="`${controlIdPrefix}-touch-device`"
+        >
+          <label class="vs-switch">
+            <input
+              :id="`${controlIdPrefix}-touch-device`"
+              v-model="draft.touchDevice"
+              type="checkbox"
+              :disabled="busy"
+            />
+            <span class="vs-switch__track" aria-hidden="true" />
+            <span class="vs-sr-only">{{ t('ui.devices.editor.touch_device') }}</span>
           </label>
         </SettingRow>
         <SettingRow :label="t('pin.device_name')" :control-id="`${controlIdPrefix}-name`">
