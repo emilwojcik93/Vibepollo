@@ -78,8 +78,9 @@ access without changing its permissions or preferences. Setting `enabled` to
 continues to deny access. The response reports `status` and `enabled_updated`;
 failed saves are reported, and a failed disable remains denied in memory.
 
-`touch_device` (boolean) marks a client whose virtual display should report a
-small physical size when it sends no posture. The response reports
+`touch_device` (boolean) marks a client whose virtual display should report the
+fixed touch diagonal (`touch_posture_diagonal_mm`, 14 in by default) when it sends
+no posture. The response reports
 `touch_device_updated`. See [touch-posture.md](touch-posture.md), which also
 documents the HTTPS `/posture` runtime update and the `posture` status object of
 `GET /api/clients/list`.

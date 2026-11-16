@@ -1,4 +1,4 @@
-# Touch posture and virtual display size (version 1)
+# Touch posture and virtual display size (contract v2)
 
 Windows has no tablet-mode switch. It docks the touch keyboard from hardware
 signals, and the one a headless host can control is the physical size reported by
@@ -7,12 +7,17 @@ float the touch keyboard over a touch client's stream. This host extension lets 
 touch client (phone, handheld, tablet or 2-in-1 in tablet posture) get a virtual
 display that reports a small physical size instead.
 
-The size is derived per session from client data or a class default. It never
-reads a physical monitor's EDID and does not depend on a per-model profile. The
-stream resolution is unchanged; only the reported millimetres differ.
+The reported size depends only on the device type and the keyboard or posture
+state. It never depends on the client's screen size, DPI or aspect ratio, and it
+never reads a physical monitor's EDID. The stream resolution is unchanged; only
+the reported millimetres differ.
 
 Clients that send nothing, and paired clients that are not flagged as touch
 devices, get exactly the display they got before.
+
+Version 1 of this contract derived the size from the client's diagonal or DPI. That
+is gone: hosts still accept `clientDiagonalMm` and `clientDpi` from older clients
+without error, but ignore them completely.
 
 ## Launch and resume arguments
 
@@ -23,12 +28,12 @@ arguments were always ignored by hosts, so older hosts and clients keep working.
 |---|---|---|
 | `clientPosture` | `desktop`, `laptop`, `tablet`, `handheld`, `phone` | Client class. An unknown value discards all posture arguments. |
 | `clientTouch` | `0` or `1` | Informational. With no `clientPosture`, `1` is treated as `tablet`. |
-| `clientDiagonalMm` | integer 50..800 | Physical screen diagonal in millimetres. |
-| `clientDpi` | integer 72..800 | Client screen density. |
+| `clientDiagonalMm`, `clientDpi` | any | Sent by older clients. Accepted and ignored. |
 
-Values outside their range, or not plain decimal integers, are ignored; they are
-never clamped. Clients should send the diagonal and DPI only when the operating
-system reports them.
+`phone`, `handheld` and `tablet` all mean "touch-primary, no physical keyboard in
+use": the docked touch keyboard is wanted. `laptop` and `desktop` mean a physical
+keyboard is in use or the device is not touch: the host keeps its default size.
+A `clientTouch` that is not `0` or `1` is ignored.
 
 ## Size policy
 
@@ -37,28 +42,53 @@ no `clientPosture`, and for a paired client flagged as a touch device that sent 
 posture. An explicit `desktop` or `laptop` posture wins over the flag. Otherwise no
 size is requested and the driver keeps its default.
 
-1. Diagonal is `clientDiagonalMm` if present, else `sqrt(w^2 + h^2) / clientDpi * 25.4`
-   over the stream pixels if a DPI is present, else a class default: phone 165 mm,
-   handheld 203 mm, tablet 305 mm.
-2. The diagonal is clamped to 100..419 mm. 419 mm is 16.5 in, a margin below the
-   18 in at which Windows stops docking its touch keyboard.
-3. Width and height follow the stream aspect ratio (16:9 if unknown) and are rounded
-   to whole millimetres.
+1. Every such client gets one fixed diagonal: `touch_posture_diagonal_mm` from
+   `sunshine.conf`, default 356 mm (14 in), valid range 100..419 mm. A value
+   outside the range, or not a plain integer, is ignored with a warning in the log
+   and the default is used. There are no per-class defaults: phone, handheld and
+   tablet are the same.
+2. The stream pixels only split that diagonal into width and height, assuming square
+   pixels (16:9 if the stream size is unknown or not positive). A portrait stream
+   reports the landscape size turned, never rescaled.
+3. Width and height are rounded to whole millimetres, each at least 10 mm.
 
-For example, a phone at 2400x1080 and 420 dpi reports about 145 x 65 mm.
+So the size is the same whatever the client is. A phone and a 65 in TV client that
+both send `clientPosture=tablet` or `clientTouch=1` get the same 14 in (356 mm)
+display. At a 16:9 stream such as 1920x1080 or 3840x2160 that is 310 x 175 mm for
+both; at a 20:9 stream (2400x1080) it is 325 x 146 mm. Only the stream aspect
+changes the split, never the diagonal. The same holds for any stream resolution,
+including the arbitrary upscaled resolutions newer clients render at.
+
+The driver writes the size to EDID bytes 0x15 and 0x16 in whole centimetres (round
+half up, at least 1) and to the preferred detailed timing in millimetres. The
+policy is tested to keep the centimetre-rounded diagonal below 17.0 in (43.2 cm) for
+every resolution and aspect from 1:64 to 64:1: a 419 mm diagonal encodes at most
+426 mm, and the highest configurable value that could still stay below 17.0 in is
+424 mm.
+
+### Why 18 in is the docking limit
+
+Windows 11 build 26300 docks the touch keyboard or floats it depending on the
+reported physical size alone, with no touch hardware or slate mode involved. Sizes up
+to 38 x 21 cm (43.4 cm, 17.1 in) dock and show the dock icon. 40 x 22 cm (45.7 cm,
+18.0 in) and larger float. The edge therefore lies between 17.1 and 18.0 in. The
+host stays below 17.0 in, so the default of 14 in has a wide margin and the 16.5 in
+maximum a small one. This is observed behaviour, not documented by Microsoft, and
+may differ on other Windows builds.
 
 The size is passed as `physical_width_mm` and `physical_height_mm` when the bundled
-virtual display driver creates the display. The log shows `Posture: requesting
-virtual display physical size`. SudoVDA has a static EDID and no size field, so it
-cannot apply the size; the host logs a warning and keeps its fixed monitor size.
-Windows reads the monitor size once when the monitor arrives, so a running display
-cannot be resized.
+virtual display driver creates the display. The driver takes millimetres as is: it
+does not rescale or swap them for a portrait stream. The log shows `Posture:
+requesting virtual display physical size` with the diagonal in mm. SudoVDA has a
+static EDID and no size field, so it cannot apply the size; the host logs a warning
+and keeps its fixed monitor size. Windows reads the monitor size once when the
+monitor arrives, so a running display cannot be resized.
 
 ## Touch device flag for stock clients
 
 Clients that cannot send a posture (for example an unmodified Moonlight on Android)
-can be marked per paired client. A flagged client that sends no posture gets
-`tablet` defaults.
+can be marked per paired client. A flagged client that sends no posture is treated
+as touch-primary and gets the same fixed diagonal as a `tablet`.
 
 - Web UI: Devices, edit device, "Treat this device as a touch device".
 - API: `POST /api/clients/update` with `{"uuid":"<uuid>","touch_device":true}`. The
@@ -71,10 +101,11 @@ The flag applies the next time the virtual display is created.
 
 ## Resume
 
-A resume whose posture crosses the touch boundary ("no size" versus "a size")
-recreates the client's virtual display before streaming resumes, so the new size
-takes effect. A change between two touch classes (for example phone to tablet) keeps
-the display. The display is not recreated when the history of the display is
+A resume whose posture crosses the touch boundary ("no size" versus "a size", for
+example tablet to laptop when a keyboard is attached) recreates the client's virtual
+display before streaming resumes, so the new size takes effect. A change between two
+touch classes (for example phone to tablet) is not a change at all, because they get
+the same size. The display is not recreated when the history of the display is
 unknown, for shared virtual displays, or when the request joins another client's
 running stream.
 
@@ -84,12 +115,13 @@ A client can report a posture change while streaming on the same HTTPS port, wit
 the paired client certificate, like `/bitrate`.
 
 ```
-GET|POST /posture?clientPosture=tablet&clientTouch=1&clientDiagonalMm=279&clientDpi=264
+GET|POST /posture?clientPosture=tablet&clientTouch=1
 ```
 
-The four arguments are the same as above and replace the client's stored posture. At
-least one valid argument is required. The caller needs the "View stream" permission
-and an active session. Calls closer than one second apart per client are rejected.
+The arguments are the same as above and replace the client's stored posture. At
+least one valid `clientPosture` or `clientTouch` is required; a call that carries
+only the legacy `clientDiagonalMm` or `clientDpi` is answered with 400. The caller
+needs the "View stream" permission and an active session. Calls closer than one second apart per client are rejected.
 
 | Result | XML |
 |---|---|
@@ -113,14 +145,14 @@ boundary.
 | `posture` | Class the client declared, or `null`. |
 | `class` | Class the size policy applies, or `null` for no size. |
 | `touch_device` | The paired-client flag. |
-| `wanted_size` | `{width_mm, height_mm}` the policy wants for the latest hints, or `null`. |
+| `wanted_size` | `{width_mm, height_mm}` the policy wants for the latest hints and the host diagonal, or `null`. |
 | `applied_known` | Whether the host knows what the display was created with. |
 | `applied_size` | Size the display was created with; `null` is the driver default or unknown. |
 | `update_pending` | A runtime update changed the wanted size after the display was created. |
 
 The log lines `Client posture class ...`, `Posture: requesting virtual display
-physical size ...` and `Posture: resume crosses the touch size boundary` show each
-step.
+physical size ...` (both with the diagonal in mm) and `Posture: resume crosses the
+touch size boundary` show each step.
 
 ## Limits
 

@@ -2442,6 +2442,36 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### touch_posture_diagonal_mm
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Physical screen diagonal, in millimetres, that the Vibepollo virtual display reports to Windows for touch-primary
+            clients: clients that send <code>clientPosture</code> <code>phone</code>, <code>handheld</code> or <code>tablet</code>
+            (or <code>clientTouch=1</code> without a posture), and paired clients marked as a touch device that send no posture.
+            Every such client gets this one diagonal, whatever its own screen size, resolution or aspect ratio; the stream
+            resolution only decides how the diagonal is split into width and height. Windows docks its touch keyboard
+            only on small displays, so the value must be between 100 and 419 (16.5 in); anything else is ignored with a
+            warning in the log and the default is used. Requires the Vibepollo virtual display driver.
+            See docs/touch-posture.md.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            356
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            touch_posture_diagonal_mm = 330
+            @endcode</td>
+    </tr>
+</table>
+
 ### minimum_fps_target
 
 <table>
