@@ -4700,6 +4700,30 @@ namespace nvhttp {
         }
         named_cert_node["connected"] = connected;
 
+        // Posture status of a streaming client: what the size policy wants, what the display was
+        // created with (null: driver default or not known), and whether a runtime update is pending.
+        if (connected) {
+          if (const auto posture_status = posture::status_for_client(named_cert->uuid)) {
+            const auto size_node = [](const std::optional<posture::physical_size_t> &size) {
+              nlohmann::json node;
+              if (size) {
+                node["width_mm"] = size->width_mm;
+                node["height_mm"] = size->height_mm;
+              }
+              return size ? node : nlohmann::json(nullptr);
+            };
+            nlohmann::json posture_node;
+            posture_node["posture"] = posture_status->posture ? nlohmann::json(std::string(posture::to_string(*posture_status->posture))) : nlohmann::json(nullptr);
+            posture_node["class"] = posture_status->client_class ? nlohmann::json(std::string(posture::to_string(*posture_status->client_class))) : nlohmann::json(nullptr);
+            posture_node["touch_device"] = posture_status->paired_touch;
+            posture_node["wanted_size"] = size_node(posture_status->wanted_size);
+            posture_node["applied_known"] = posture_status->applied_known;
+            posture_node["applied_size"] = size_node(posture_status->applied_size);
+            posture_node["update_pending"] = posture_status->update_pending;
+            named_cert_node["posture"] = std::move(posture_node);
+          }
+        }
+
         named_cert_nodes.push_back(named_cert_node);
       }
 
