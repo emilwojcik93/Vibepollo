@@ -332,7 +332,7 @@ namespace nvhttp {
   /**
    * @brief Persist the per-client "touch device" flag.
    *
-   * A flagged client that sends no posture hint gets a tablet-sized virtual display.
+   * A flagged client that sends no posture hint gets the fixed touch diagonal (`touch_posture_diagonal_mm`).
    * @return True if the client was found and updated.
    */
   bool set_client_touch_device(const std::string &uuid, bool touch_device);

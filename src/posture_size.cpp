@@ -9,8 +9,6 @@
 
 namespace posture {
   namespace {
-    constexpr double mm_per_inch = 25.4;
-
     // Strict decimal integer: digits only, bounded length, inside [min, max].
     std::optional<int> parse_ranged_int(std::string_view value, int min, int max) {
       if (value.empty() || value.size() > 6) {
@@ -27,17 +25,6 @@ namespace posture {
         return std::nullopt;
       }
       return parsed;
-    }
-
-    double class_default_diagonal_mm(client_class_e client_class) {
-      switch (client_class) {
-        case client_class_e::phone:
-          return phone_default_diagonal_mm;
-        case client_class_e::handheld:
-          return handheld_default_diagonal_mm;
-        default:
-          return tablet_default_diagonal_mm;
-      }
     }
   }  // namespace
 
@@ -76,25 +63,22 @@ namespace posture {
     return std::nullopt;
   }
 
-  std::optional<int> parse_diagonal_mm(std::string_view value) {
-    return parse_ranged_int(value, min_diagonal_arg_mm, max_diagonal_arg_mm);
+  std::optional<int> parse_touch_diagonal_mm(std::string_view value) {
+    return parse_ranged_int(value, min_touch_diagonal_mm, max_touch_diagonal_mm);
   }
 
-  std::optional<int> parse_dpi(std::string_view value) {
-    return parse_ranged_int(value, min_dpi_arg, max_dpi_arg);
+  int sanitize_touch_diagonal_mm(int configured_mm) {
+    if (configured_mm < min_touch_diagonal_mm || configured_mm > max_touch_diagonal_mm) {
+      return default_touch_diagonal_mm;
+    }
+    return configured_mm;
   }
 
   bool hints_t::has_client_hints() const {
-    return posture || touch || diagonal_mm || dpi;
+    return posture || touch;
   }
 
-  hints_t parse_hints(
-    std::string_view posture_value,
-    std::string_view touch_value,
-    std::string_view diagonal_mm_value,
-    std::string_view dpi_value,
-    bool paired_touch
-  ) {
+  hints_t parse_hints(std::string_view posture_value, std::string_view touch_value, bool paired_touch) {
     hints_t hints;
     hints.paired_touch = paired_touch;
 
@@ -105,8 +89,6 @@ namespace posture {
       }
     }
     hints.touch = parse_touch(touch_value);
-    hints.diagonal_mm = parse_diagonal_mm(diagonal_mm_value);
-    hints.dpi = parse_dpi(dpi_value);
     return hints;
   }
 
@@ -127,32 +109,31 @@ namespace posture {
     return std::nullopt;
   }
 
-  std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px) {
-    const auto client_class = effective_class(hints);
-    if (!client_class) {
+  std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px, int diagonal_mm) {
+    if (!effective_class(hints)) {
       return std::nullopt;
     }
 
+    const double diagonal = sanitize_touch_diagonal_mm(diagonal_mm);
+
+    // Square pixels: the stream aspect only splits the fixed diagonal. 16:9 when the stream size is unknown.
     const bool have_pixels = width_px > 0 && height_px > 0;
-    const double pixel_diagonal = have_pixels ? std::hypot(static_cast<double>(width_px), static_cast<double>(height_px)) : 0.0;
-
-    double diagonal_mm = class_default_diagonal_mm(*client_class);
-    if (hints.diagonal_mm) {
-      diagonal_mm = *hints.diagonal_mm;
-    } else if (hints.dpi && have_pixels) {
-      diagonal_mm = pixel_diagonal / *hints.dpi * mm_per_inch;
-    }
-    diagonal_mm = std::clamp(diagonal_mm, static_cast<double>(min_diagonal_mm), static_cast<double>(max_diagonal_mm));
-
-    // 16:9 when the stream size is unknown.
     const double aspect_width = have_pixels ? width_px : 16;
     const double aspect_height = have_pixels ? height_px : 9;
-    const double aspect_diagonal = have_pixels ? pixel_diagonal : std::hypot(aspect_width, aspect_height);
+    const double aspect_diagonal = std::hypot(aspect_width, aspect_height);
 
     const auto side_mm = [&](double aspect_side) {
-      const double side = std::round(diagonal_mm * aspect_side / aspect_diagonal);
-      return static_cast<std::uint32_t>(std::clamp(side, static_cast<double>(min_side_mm), static_cast<double>(max_side_mm)));
+      const double side = std::round(diagonal * aspect_side / aspect_diagonal);
+      return static_cast<std::uint32_t>(std::max(side, static_cast<double>(min_side_mm)));
     };
     return physical_size_t {side_mm(aspect_width), side_mm(aspect_height)};
+  }
+
+  std::uint32_t size_diagonal_mm(const physical_size_t &size) {
+    return static_cast<std::uint32_t>(std::lround(std::hypot(static_cast<double>(size.width_mm), static_cast<double>(size.height_mm))));
+  }
+
+  std::uint32_t edid_size_cm(std::uint32_t millimetres) {
+    return std::clamp((millimetres + 5u) / 10u, 1u, 255u);
   }
 }  // namespace posture

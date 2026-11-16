@@ -259,6 +259,7 @@ namespace config {
       bool wayland_hdr_compatibility;  ///< Opt in to native KDE/Wayland HDR launch environment compatibility for resolved HDR streams.
     } dd;
 
+    int touch_posture_diagonal_mm;  ///< Fixed physical diagonal (mm) the virtual display reports for touch-primary clients. Range 100-419, default 356 (14 in).
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Idle-frame timing target in FPS. Default 20, range 0-1000; 0 uses the capture/encoder path fallback (see configuration docs).
     bool wgc_pacing_smoothing;  ///< Smooth WGC delivered frame cadence under low-latency (Reflex) source caps by snapping the pacing-group re-anchor back onto the prior grid instead of the jittery arrival phase. Disable for byte-for-byte legacy pacing.

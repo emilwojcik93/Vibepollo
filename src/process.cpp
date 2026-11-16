@@ -1726,7 +1726,12 @@ namespace proc {
         std::memcpy(posture_display_key.data(), &display_guid, posture_display_key.size());
         posture::set_desired_size(
           posture_display_key,
-          posture::derive_physical_size(launch_session->client_posture, static_cast<int>(render_width), static_cast<int>(render_height)),
+          posture::derive_physical_size(
+            launch_session->client_posture,
+            static_cast<int>(render_width),
+            static_cast<int>(render_height),
+            config::video.touch_posture_diagonal_mm
+          ),
           launch_session->client_uuid
         );
 

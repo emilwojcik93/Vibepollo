@@ -839,7 +839,7 @@ namespace VDISPLAY {
       // The SudoVDA driver has a static EDID and no size field or IOCTL, so the posture size cannot be applied.
       BOOST_LOG(warning) << "Posture: SudoVDA cannot report a custom physical size; ignoring requested "
                          << posture_size->width_mm << 'x' << posture_size->height_mm
-                         << " mm and keeping the driver's fixed monitor size. Use the bundled virtual display driver for touch posture sizing.";
+                         << " mm (diagonal " << posture::size_diagonal_mm(*posture_size) << " mm) and keeping the driver's fixed monitor size. Use the bundled virtual display driver for touch posture sizing.";
     }
     return VDISPLAY_SUDOVDA::createVirtualDisplay(s_client_uid, s_client_name, s_hdr_profile, width, height, fps, guid, base_fps_millihz, framegen_refresh_active, framegen_refresh_multiplier, hdr_requested, allow_pending_enumeration, replace_existing, preserve_peer_displays);
   }

@@ -59,8 +59,8 @@ namespace posture {
   /// Same check against the size policy output for `hints`.
   bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints);
 
-  /// Record the hints and stream size a client launched or resumed with.
-  void record_launch(const std::string &client_uuid, const hints_t &hints, int width_px, int height_px);
+  /// Record the hints, stream size and host touch diagonal (mm) a client launched or resumed with.
+  void record_launch(const std::string &client_uuid, const hints_t &hints, int width_px, int height_px, int diagonal_mm = default_touch_diagonal_mm);
 
   struct update_result_t {
     enum class status_e {

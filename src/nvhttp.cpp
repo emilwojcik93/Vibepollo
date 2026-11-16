@@ -2094,7 +2094,12 @@ namespace nvhttp {
           std::memcpy(posture_display_key.data(), &virtual_display_guid, posture_display_key.size());
           posture::set_desired_size(
             posture_display_key,
-            posture::derive_physical_size(launch_session->client_posture, static_cast<int>(recovery_params.width), static_cast<int>(recovery_params.height)),
+            posture::derive_physical_size(
+              launch_session->client_posture,
+              static_cast<int>(recovery_params.width),
+              static_cast<int>(recovery_params.height),
+              config::video.touch_posture_diagonal_mm
+            ),
             launch_session->client_uuid
           );
           const char *hdr_profile = launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr;
@@ -3435,14 +3440,15 @@ namespace nvhttp {
       launch_session->client_posture = posture::parse_hints(
         get_arg(args, "clientPosture", ""),
         get_arg(args, "clientTouch", ""),
-        get_arg(args, "clientDiagonalMm", ""),
-        get_arg(args, "clientDpi", ""),
         verified_client->touch_device
       );
-      posture::record_launch(launch_session->client_uuid, launch_session->client_posture, launch_session->width, launch_session->height);
-      if (const auto session_size = posture::derive_physical_size(launch_session->client_posture, launch_session->width, launch_session->height)) {
+      // Contract v2: the legacy clientDiagonalMm and clientDpi arguments of older clients are never read.
+      const int touch_diagonal_mm = posture::sanitize_touch_diagonal_mm(config::video.touch_posture_diagonal_mm);
+      posture::record_launch(launch_session->client_uuid, launch_session->client_posture, launch_session->width, launch_session->height, touch_diagonal_mm);
+      if (const auto session_size = posture::derive_physical_size(launch_session->client_posture, launch_session->width, launch_session->height, touch_diagonal_mm)) {
         BOOST_LOG(info) << "Client posture class "sv << posture::to_string(*posture::effective_class(launch_session->client_posture))
-                        << ": virtual display physical size "sv << session_size->width_mm << 'x' << session_size->height_mm << " mm"sv;
+                        << ": virtual display physical size "sv << session_size->width_mm << 'x' << session_size->height_mm
+                        << " mm, diagonal "sv << posture::size_diagonal_mm(*session_size) << " mm (host touch_posture_diagonal_mm "sv << touch_diagonal_mm << ")"sv;
       }
       const auto launch_appid_arg = get_arg(args, "appid", "0");
       const auto launch_appuuid_arg = get_arg(args, "appuuid", "");
@@ -7284,7 +7290,8 @@ launch_session->exact_target_hold.reset();
   /**
    * @brief Update the posture hints of a streaming client (`/posture`).
    *
-   * Takes the same four arguments as /launch and /resume. The stored posture state of the
+   * Takes the same posture arguments as /launch and /resume (`clientPosture`, `clientTouch`; the
+   * legacy `clientDiagonalMm` and `clientDpi` are accepted and ignored). The stored posture state of the
    * client is replaced and the derived virtual display size is recomputed. A running stream's
    * display is never recreated here: Windows reads the monitor size once at arrival and the
    * capture target is the display itself, so a changed size stays pending and takes effect at
@@ -7316,8 +7323,6 @@ launch_session->exact_target_hold.reset();
     const auto hints = posture::parse_hints(
       get_arg(args, "clientPosture", ""),
       get_arg(args, "clientTouch", ""),
-      get_arg(args, "clientDiagonalMm", ""),
-      get_arg(args, "clientDpi", ""),
       verified_client->touch_device
     );
     if (!hints.has_client_hints()) {
@@ -7335,7 +7340,9 @@ launch_session->exact_target_hold.reset();
     const auto update = posture::apply_runtime_update(verified_client->uuid, hints, std::chrono::steady_clock::now());
     using update_status_e = posture::update_result_t::status_e;
     const auto size_text = [](const std::optional<posture::physical_size_t> &size) {
-      return size ? std::to_string(size->width_mm) + "x" + std::to_string(size->height_mm) + " mm" : std::string("default");
+      return size ?
+               std::to_string(size->width_mm) + "x" + std::to_string(size->height_mm) + " mm (diagonal " + std::to_string(posture::size_diagonal_mm(*size)) + " mm)" :
+               std::string("default");
     };
     switch (update.status) {
       case update_status_e::no_session:

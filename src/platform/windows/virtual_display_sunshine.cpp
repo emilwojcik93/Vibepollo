@@ -7521,13 +7521,16 @@ namespace VDISPLAY_SUNSHINE {
       // Apply requested scaling through set_display_scale_percent after activation.
       create_request.refresh_rate_millihz = descriptor_fps;
       // Touch clients (posture hint or paired-client touch flag) get a small reported physical
-      // size so Windows docks its touch keyboard. This is a fixed per-session size from the posture
-      // policy, not a DPI encoding. Without a size the driver keeps its default monitor dimensions.
+      // size so Windows docks its touch keyboard. This is one fixed diagonal from the posture policy
+      // (host option touch_posture_diagonal_mm), split by the stream aspect; it never depends on the
+      // client screen. The driver takes millimetres as is (EDID cm bytes and DTD image size), with no
+      // rescale or swap. Without a size the driver keeps its default monitor dimensions.
       if (posture_size) {
         create_request.physical_width_mm = posture_size->width_mm;
         create_request.physical_height_mm = posture_size->height_mm;
         BOOST_LOG(info) << "Posture: requesting virtual display physical size " << posture_size->width_mm << 'x'
-                        << posture_size->height_mm << " mm (guid=" << requested_uuid.string() << ").";
+                        << posture_size->height_mm << " mm, diagonal " << posture::size_diagonal_mm(*posture_size)
+                        << " mm (guid=" << requested_uuid.string() << ").";
       }
       if (!VDISPLAY::catalog_policy::set_create_policy(client, create_request, requested_resolution_only)) {
         allow_driver_recovery = false;

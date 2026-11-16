@@ -24,6 +24,7 @@ namespace posture {
       hints_t hints;
       int width_px = 0;
       int height_px = 0;
+      int diagonal_mm = default_touch_diagonal_mm;
       bool update_pending = false;
       std::optional<std::chrono::steady_clock::time_point> last_update;
     };
@@ -98,11 +99,11 @@ namespace posture {
   }
 
   bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints) {
-    // Only whether a size applies matters here, so the stream size is irrelevant.
+    // Only whether a size applies matters here, so the stream size and diagonal are irrelevant.
     return size_crosses_boundary(applied, derive_physical_size(hints, 0, 0));
   }
 
-  void record_launch(const std::string &client_uuid, const hints_t &hints, int width_px, int height_px) {
+  void record_launch(const std::string &client_uuid, const hints_t &hints, int width_px, int height_px, int diagonal_mm) {
     if (client_uuid.empty()) {
       return;
     }
@@ -114,6 +115,7 @@ namespace posture {
     entry.hints = hints;
     entry.width_px = width_px;
     entry.height_px = height_px;
+    entry.diagonal_mm = sanitize_touch_diagonal_mm(diagonal_mm);
     entry.update_pending = false;
   }
 
@@ -131,8 +133,8 @@ namespace posture {
     }
     entry.last_update = now;
 
-    result.previous = derive_physical_size(entry.hints, entry.width_px, entry.height_px);
-    result.current = derive_physical_size(hints, entry.width_px, entry.height_px);
+    result.previous = derive_physical_size(entry.hints, entry.width_px, entry.height_px, entry.diagonal_mm);
+    result.current = derive_physical_size(hints, entry.width_px, entry.height_px, entry.diagonal_mm);
     result.boundary_crossed = result.previous.has_value() != result.current.has_value();
     result.status = result.previous == result.current ? update_result_t::status_e::unchanged : update_result_t::status_e::changed;
 
@@ -155,7 +157,7 @@ namespace posture {
     status.posture = entry.hints.posture;
     status.client_class = effective_class(entry.hints);
     status.paired_touch = entry.hints.paired_touch;
-    status.wanted_size = derive_physical_size(entry.hints, entry.width_px, entry.height_px);
+    status.wanted_size = derive_physical_size(entry.hints, entry.width_px, entry.height_px, entry.diagonal_mm);
     status.update_pending = entry.update_pending;
 
     const display_entry_t *latest = nullptr;

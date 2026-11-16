@@ -1,11 +1,13 @@
 /**
  * @file src/posture_size.h
- * @brief Pure client-posture parsing and virtual display physical size policy.
+ * @brief Pure client-posture parsing and virtual display physical size policy (contract v2).
  *
- * Touch clients (phones, handhelds, tablets) get a virtual display whose reported
- * physical size is small enough for Windows to dock its touch keyboard. The size is
- * derived from client supplied hints or a class default; it never depends on any
- * physical monitor. Nothing here performs I/O or depends on Windows or Boost.
+ * Touch-primary clients (phones, handhelds, tablets) get a virtual display that reports one
+ * fixed physical diagonal, small enough for Windows to dock its touch keyboard. The size
+ * depends only on the device type and keyboard/posture state: never on the client screen
+ * size, DPI or aspect, and never on any physical monitor. The stream pixels only decide how
+ * the fixed diagonal is split into width and height. Nothing here performs I/O or depends
+ * on Windows or Boost.
  */
 #pragma once
 
@@ -23,25 +25,26 @@ namespace posture {
     phone,
   };
 
-  // Accepted ranges of the wire arguments. Values outside are ignored, never clamped.
-  inline constexpr int min_diagonal_arg_mm = 50;
-  inline constexpr int max_diagonal_arg_mm = 800;
-  inline constexpr int min_dpi_arg = 72;
-  inline constexpr int max_dpi_arg = 800;
+  /// Default host diagonal for touch-primary clients: 14 in. One value for phone, handheld and tablet.
+  inline constexpr int default_touch_diagonal_mm = 356;
 
-  // Class default diagonals, used when the client sends neither a diagonal nor a DPI.
-  inline constexpr int phone_default_diagonal_mm = 165;  ///< 6.5 in
-  inline constexpr int handheld_default_diagonal_mm = 203;  ///< 8 in
-  inline constexpr int tablet_default_diagonal_mm = 305;  ///< 12 in
+  // Accepted range of the host option `touch_posture_diagonal_mm`. Values outside are rejected,
+  // never clamped (callers fall back to the default). The upper bound is 419 mm = 16.5 in. Windows
+  // 11 build 26300 docks the touch keyboard up to 38x21 cm (43.4 cm, 17.1 in) and floats it from
+  // 40x22 cm (45.7 cm, 18.0 in); the limit used here is 17.0 in (431.8 mm), a margin below the
+  // largest size observed to dock. Rounding both sides to whole centimetres in the EDID (see
+  // edid_size_cm) can add up to 7.8 mm; swept over every aspect from 1:64 to 64:1, a 419 mm
+  // diagonal encodes at most 426.4 mm (16.8 in). The highest value that still stays below the
+  // limit is 424 mm, so 419 keeps a 5 mm margin.
+  inline constexpr int min_touch_diagonal_mm = 100;
+  inline constexpr int max_touch_diagonal_mm = 419;
 
-  // Every derived diagonal is clamped to this range. The upper bound is 16.5 in, a margin
-  // below the 18 in size at which Windows stops docking its touch keyboard.
-  inline constexpr int min_diagonal_mm = 100;
-  inline constexpr int max_diagonal_mm = 419;
+  /// Diagonal every EDID size must stay below so the Windows touch keyboard docks (observed, not documented): 17.0 in.
+  inline constexpr double docking_limit_diagonal_mm = 17.0 * 25.4;
 
-  // Per-side bounds of the derived size. Inside what the virtual display driver accepts.
+  // Per-side lower bound of the derived size. Inside what the virtual display driver accepts and
+  // large enough to survive rounding to one whole centimetre in the EDID.
   inline constexpr int min_side_mm = 10;
-  inline constexpr int max_side_mm = 419;
 
   /// Lowercase wire name of a class.
   std::string_view to_string(client_class_e client_class);
@@ -52,23 +55,23 @@ namespace posture {
   /// Parse `clientTouch`. Only "0" and "1" are valid.
   std::optional<bool> parse_touch(std::string_view value);
 
-  /// Parse `clientDiagonalMm`: a decimal integer in [50, 800].
-  std::optional<int> parse_diagonal_mm(std::string_view value);
+  /// Parse the host option `touch_posture_diagonal_mm`: a decimal integer in [100, 419], digits only.
+  std::optional<int> parse_touch_diagonal_mm(std::string_view value);
 
-  /// Parse `clientDpi`: a decimal integer in [72, 800].
-  std::optional<int> parse_dpi(std::string_view value);
+  /// The configured diagonal when it is inside [100, 419] mm, else the 356 mm default.
+  int sanitize_touch_diagonal_mm(int configured_mm);
 
   /**
    * @brief Validated posture hints of one client.
    *
    * Every field is empty when the client sent nothing usable. `paired_touch` is the
    * host-side per-paired-client "touch device" flag and is not sent by clients.
+   * `clientDiagonalMm` and `clientDpi` of older clients are deliberately not kept: they
+   * have no influence on the size policy.
    */
   struct hints_t {
     std::optional<client_class_e> posture;
     std::optional<bool> touch;
-    std::optional<int> diagonal_mm;
-    std::optional<int> dpi;
     bool paired_touch = false;
 
     /// True when the client itself sent at least one valid argument.
@@ -78,19 +81,14 @@ namespace posture {
   };
 
   /**
-   * @brief Parse and validate the four wire arguments. Empty strings mean "absent".
+   * @brief Parse and validate the wire arguments that matter. Empty strings mean "absent".
    *
    * A non-empty `clientPosture` that is not a known class discards every hint, because
-   * the remaining values cannot be interpreted without it. Other invalid values are
-   * dropped individually.
+   * `clientTouch` cannot be interpreted without it. An invalid `clientTouch` is dropped.
+   * The legacy `clientDiagonalMm` and `clientDpi` arguments are never read: hosts ignore
+   * them, so older clients that still send them keep working.
    */
-  hints_t parse_hints(
-    std::string_view posture,
-    std::string_view touch,
-    std::string_view diagonal_mm,
-    std::string_view dpi,
-    bool paired_touch = false
-  );
+  hints_t parse_hints(std::string_view posture, std::string_view touch, bool paired_touch = false);
 
   /// Physical size of the virtual display in whole millimetres.
   struct physical_size_t {
@@ -109,13 +107,27 @@ namespace posture {
   std::optional<client_class_e> effective_class(const hints_t &hints);
 
   /**
-   * @brief Derive the virtual display physical size.
+   * @brief Derive the virtual display physical size (contract v2).
    *
-   * Diagonal is the client diagonal if present, else the stream pixel diagonal divided
-   * by the DPI, else the class default, then clamped to [100, 419] mm and split by the
-   * stream aspect ratio (16:9 when a dimension is not positive).
+   * One fixed diagonal for every touch-primary client: `diagonal_mm` when it is inside
+   * [100, 419], else the 356 mm default. The stream pixels only split that diagonal into
+   * width and height assuming square pixels (16:9 when a dimension is not positive), so
+   * the result is the same for any stream resolution and any client screen size or aspect.
+   * Each side is at least 10 mm. For every input the diagonal as encoded in the EDID
+   * (whole centimetres, see edid_size_cm) stays below the 17.0 in docking limit.
    *
    * @return nullopt when no policy applies, so callers keep today's behaviour.
    */
-  std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px);
+  std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px, int diagonal_mm = default_touch_diagonal_mm);
+
+  /// Diagonal of a size in whole millimetres, for log lines and status text.
+  std::uint32_t size_diagonal_mm(const physical_size_t &size);
+
+  /**
+   * @brief Whole centimetres the virtual display driver writes to EDID bytes 0x15/0x16.
+   *
+   * Mirrors libvirtualdisplay: round half up, clamped to [1, 255]. This is what Windows sees,
+   * so it is the value the docking guarantee is checked against.
+   */
+  std::uint32_t edid_size_cm(std::uint32_t millimetres);
 }  // namespace posture
