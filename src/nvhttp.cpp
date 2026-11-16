@@ -68,6 +68,7 @@
 #include "power_action_http.h"
 #include "nvhttp_bitrate_policy.h"
 #include "nvhttp_dispatch.h"
+#include "posture_state.h"
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "platform/common.h"
@@ -3401,6 +3402,18 @@ namespace nvhttp {
       }
       launch_session->unique_id = get_arg(args, "uniqueid", "unknown");
       launch_session->perm = verified_client->perm;
+      launch_session->client_posture = posture::parse_hints(
+        get_arg(args, "clientPosture", ""),
+        get_arg(args, "clientTouch", ""),
+        get_arg(args, "clientDiagonalMm", ""),
+        get_arg(args, "clientDpi", ""),
+        verified_client->touch_device
+      );
+      posture::record_launch(launch_session->client_uuid, launch_session->client_posture, launch_session->width, launch_session->height);
+      if (const auto session_size = posture::derive_physical_size(launch_session->client_posture, launch_session->width, launch_session->height)) {
+        BOOST_LOG(info) << "Client posture class "sv << posture::to_string(*posture::effective_class(launch_session->client_posture))
+                        << ": virtual display physical size "sv << session_size->width_mm << 'x' << session_size->height_mm << " mm"sv;
+      }
       const auto launch_appid_arg = get_arg(args, "appid", "0");
       const auto launch_appuuid_arg = get_arg(args, "appuuid", "");
       const auto launch_identity_control = remote_session::identify(
