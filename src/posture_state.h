@@ -49,11 +49,14 @@ namespace posture {
   void forget_all_displays();
 
   /**
-   * @brief True when a display created with `applied` no longer matches the policy for `hints`.
+   * @brief True when a display created with `applied` no longer matches the wanted size.
    *
    * Only "none versus some" counts: a size change between two touch classes keeps the display.
    * An unknown applied state never reports a mismatch.
    */
+  bool size_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const std::optional<physical_size_t> &wanted);
+
+  /// Same check against the size policy output for `hints`.
   bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints);
 
   /// Record the hints and stream size a client launched or resumed with.

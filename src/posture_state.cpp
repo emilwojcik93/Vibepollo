@@ -90,11 +90,16 @@ namespace posture {
     }
   }
 
-  bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints) {
+  bool size_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const std::optional<physical_size_t> &wanted) {
     if (!applied) {
       return false;
     }
-    return applied->has_value() != effective_class(hints).has_value();
+    return applied->has_value() != wanted.has_value();
+  }
+
+  bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints) {
+    // Only whether a size applies matters here, so the stream size is irrelevant.
+    return size_crosses_boundary(applied, derive_physical_size(hints, 0, 0));
   }
 
   void record_launch(const std::string &client_uuid, const hints_t &hints, int width_px, int height_px) {

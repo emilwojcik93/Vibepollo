@@ -77,6 +77,17 @@ TEST(PostureBoundary, OnlyNoneVersusSomeCrosses) {
   EXPECT_FALSE(display_crosses_boundary(created_with_size, parse_hints("tablet", "", "400", "")));
 }
 
+TEST(PostureBoundary, SizeCheckComparesPresenceOnly) {
+  const std::optional<std::optional<physical_size_t>> created_without_size {std::optional<physical_size_t> {}};
+  const std::optional<std::optional<physical_size_t>> created_with_size {std::optional<physical_size_t> {tablet_16x9}};
+
+  EXPECT_FALSE(size_crosses_boundary(std::nullopt, tablet_16x9));
+  EXPECT_TRUE(size_crosses_boundary(created_without_size, tablet_16x9));
+  EXPECT_FALSE(size_crosses_boundary(created_without_size, std::nullopt));
+  EXPECT_TRUE(size_crosses_boundary(created_with_size, std::nullopt));
+  EXPECT_FALSE(size_crosses_boundary(created_with_size, physical_size_t {144, 81}));
+}
+
 TEST(PostureRuntimeUpdate, UnknownClientHasNoSession) {
   const auto result = apply_runtime_update("state-test-unknown", parse_hints("tablet", "", "", ""), t0);
   EXPECT_EQ(result.status, status_e::no_session);

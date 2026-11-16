@@ -7354,6 +7354,10 @@ namespace VDISPLAY_SUNSHINE {
 
       std::vector<VirtualDisplayRecoveryEntry> recovery_entries;
       std::optional<sunshine_driver::OwnerCapability> owner_capability;
+      // Size the posture policy wants for this display (see posture_state.h); empty keeps the driver default.
+      posture::display_key_t posture_display_key {};
+      std::memcpy(posture_display_key.data(), requested_uuid.b8, posture_display_key.size());
+      const auto posture_size = posture::desired_size(posture_display_key);
       bool reclaimed_for_reuse = false;
       if (*secure_reclaim_supported) {
         if (!load_virtual_display_recovery_journal_for_driver(client, recovery_entries)) {
@@ -7421,7 +7425,16 @@ namespace VDISPLAY_SUNSHINE {
                               << " (guid=" << requested_uuid.string()
                               << ", display_id=" << display_id << ").";
             }
-            if (reclaimed_plan.action == VDISPLAY::policy::reclaimed_display_action::recreate) {
+            // A display created with the other side of the touch size boundary (none versus some size)
+            // must be replaced for the new size to take effect. Shared displays are never replaced here.
+            const bool posture_recreate =
+              replace_existing &&
+              posture::size_crosses_boundary(posture::applied_size(posture_display_key), posture_size);
+            if (posture_recreate) {
+              BOOST_LOG(info) << "Posture: the reclaimed virtual display was created with a different size class; replacing it"
+                              << " (guid=" << requested_uuid.string() << ").";
+            }
+            if (reclaimed_plan.action == VDISPLAY::policy::reclaimed_display_action::recreate || posture_recreate) {
               BOOST_LOG(info)
                 << "Securely releasing the prior owned virtual display before "
                 << (replace_existing ? "replacement" : "render-adapter-safe recreation")
@@ -7510,9 +7523,6 @@ namespace VDISPLAY_SUNSHINE {
       // Touch clients (posture hint or paired-client touch flag) get a small reported physical
       // size so Windows docks its touch keyboard. This is a fixed per-session size from the posture
       // policy, not a DPI encoding. Without a size the driver keeps its default monitor dimensions.
-      posture::display_key_t posture_display_key {};
-      std::memcpy(posture_display_key.data(), requested_uuid.b8, posture_display_key.size());
-      const auto posture_size = posture::desired_size(posture_display_key);
       if (posture_size) {
         create_request.physical_width_mm = posture_size->width_mm;
         create_request.physical_height_mm = posture_size->height_mm;
