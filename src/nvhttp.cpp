@@ -7257,6 +7257,82 @@ launch_session->exact_target_hold.reset();
     tree.put("root.<xmlattr>.status_code", 200);
   }
 
+  /**
+   * @brief Update the posture hints of a streaming client (`/posture`).
+   *
+   * Takes the same four arguments as /launch and /resume. The stored posture state of the
+   * client is replaced and the derived virtual display size is recomputed. A running stream's
+   * display is never recreated here: Windows reads the monitor size once at arrival and the
+   * capture target is the display itself, so a changed size stays pending and takes effect at
+   * the next launch or resume, which recreates the display when the change crosses the touch
+   * size boundary.
+   */
+  void setPosture(resp_https_t response, req_https_t request, const verified_client_t &verified_client) {
+    print_req<SunshineHTTPS>(request);
+
+    pt::ptree tree;
+    auto g = util::fail_guard([&]() {
+      std::ostringstream data;
+      pt::write_xml(data, tree);
+      response->write(data.str());
+      response->close_connection_after_response = true;
+    });
+    const auto fail = [&tree](int status_code, const char *message) {
+      tree.put("root.<xmlattr>.status_code", status_code);
+      tree.put("root.<xmlattr>.status_message", message);
+    };
+
+    if (!has_client_perm(verified_client, PERM::_allow_view)) {
+      log_permission_denied("SetPosture"sv, "View stream"sv, verified_client);
+      fail(403, "Permission denied: this device lacks the \"View stream\" permission.");
+      return;
+    }
+
+    auto args = request->parse_query_string();
+    const auto hints = posture::parse_hints(
+      get_arg(args, "clientPosture", ""),
+      get_arg(args, "clientTouch", ""),
+      get_arg(args, "clientDiagonalMm", ""),
+      get_arg(args, "clientDpi", ""),
+      verified_client->touch_device
+    );
+    if (!hints.has_client_hints()) {
+      fail(400, "Missing or invalid posture parameters");
+      return;
+    }
+
+    const auto connected_uuids = rtsp_stream::get_all_session_uuids();
+    if (std::find(connected_uuids.begin(), connected_uuids.end(), verified_client->uuid) == connected_uuids.end()) {
+      BOOST_LOG(debug) << "Posture update from ["sv << verified_client->name << "] but the client has no active session"sv;
+      fail(404, "No active session for this client");
+      return;
+    }
+
+    const auto update = posture::apply_runtime_update(verified_client->uuid, hints, std::chrono::steady_clock::now());
+    using update_status_e = posture::update_result_t::status_e;
+    const auto size_text = [](const std::optional<posture::physical_size_t> &size) {
+      return size ? std::to_string(size->width_mm) + "x" + std::to_string(size->height_mm) + " mm" : std::string("default");
+    };
+    switch (update.status) {
+      case update_status_e::no_session:
+        fail(404, "No active session for this client");
+        return;
+      case update_status_e::rate_limited:
+        fail(429, "Too many posture updates; wait at least one second between calls");
+        return;
+      case update_status_e::unchanged:
+        BOOST_LOG(debug) << "Client ["sv << verified_client->name << "] posture update leaves the virtual display size at "sv << size_text(update.current);
+        break;
+      case update_status_e::changed:
+        BOOST_LOG(info) << "Client ["sv << verified_client->name << "] posture update changes the wanted virtual display size from "sv
+                        << size_text(update.previous) << " to "sv << size_text(update.current)
+                        << (update.boundary_crossed ? " (crosses the touch size boundary)"sv : ""sv)
+                        << ". The running display is not recreated; the change applies at the next launch or resume."sv;
+        break;
+    }
+    tree.put("root.<xmlattr>.status_code", 200);
+  }
+
   void getAbrCapabilities(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -7815,6 +7891,22 @@ launch_session->exact_target_hold.reset();
         }
       );
     };
+    // Runtime posture update, authenticated by the paired client certificate like /bitrate.
+    const auto posture_route = [run_blocking_nvhttp](auto response, auto request) {
+      const auto client = get_verified_cert(request);
+      if (!has_client_perm(client, PERM::_allow_view)) {
+        // Rejected before queueing; setPosture writes the denial.
+        setPosture(std::move(response), std::move(request), client);
+        return;
+      }
+      run_blocking_nvhttp(response, "posture", [response, request = std::move(request)]() mutable {
+        // Permissions and pairing can change while queued, so resolve the client again.
+        const auto current_client = get_verified_cert(request);
+        setPosture(std::move(response), std::move(request), current_client);
+      });
+    };
+    https_server.resource["^/posture$"]["GET"] = posture_route;
+    https_server.resource["^/posture$"]["POST"] = posture_route;
     https_server.resource["^/api/abr/capabilities$"]["GET"] = getAbrCapabilities;
     https_server.resource["^/pyrowave-bandwidth-probe$"]["GET"] = getPyroWaveBandwidthProbe;
     https_server.resource["^/pyrowave-udp-probe$"]["GET"] = [run_blocking_nvhttp](auto resp, auto req) {
