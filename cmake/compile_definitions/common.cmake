@@ -118,6 +118,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/nvhttp_bitrate_policy.h"
         "${CMAKE_SOURCE_DIR}/src/posture_size.cpp"
         "${CMAKE_SOURCE_DIR}/src/posture_size.h"
+        "${CMAKE_SOURCE_DIR}/src/posture_state.cpp"
+        "${CMAKE_SOURCE_DIR}/src/posture_state.h"
         "${CMAKE_SOURCE_DIR}/src/httpcommon.cpp"
         "${CMAKE_SOURCE_DIR}/src/http_policy.cpp"
         "${CMAKE_SOURCE_DIR}/src/httpcommon.h"
