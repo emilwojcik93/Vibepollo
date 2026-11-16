@@ -28,6 +28,7 @@
 #include "src/platform/windows/display_helper_reactivation.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/virtual_display_recovery_policy.h"
+#include "src/posture_state.h"
 #include "src/process.h"
 #include "src/state_storage.h"
 #include "src/uuid.h"
@@ -7506,6 +7507,18 @@ namespace VDISPLAY_SUNSHINE {
       // physical size can make Windows classify the display as a handheld.
       // Apply requested scaling through set_display_scale_percent after activation.
       create_request.refresh_rate_millihz = descriptor_fps;
+      // Touch clients (posture hint or paired-client touch flag) get a small reported physical
+      // size so Windows docks its touch keyboard. This is a fixed per-session size from the posture
+      // policy, not a DPI encoding. Without a size the driver keeps its default monitor dimensions.
+      posture::display_key_t posture_display_key {};
+      std::memcpy(posture_display_key.data(), requested_uuid.b8, posture_display_key.size());
+      const auto posture_size = posture::desired_size(posture_display_key);
+      if (posture_size) {
+        create_request.physical_width_mm = posture_size->width_mm;
+        create_request.physical_height_mm = posture_size->height_mm;
+        BOOST_LOG(info) << "Posture: requesting virtual display physical size " << posture_size->width_mm << 'x'
+                        << posture_size->height_mm << " mm (guid=" << requested_uuid.string() << ").";
+      }
       if (!VDISPLAY::catalog_policy::set_create_policy(client, create_request, requested_resolution_only)) {
         allow_driver_recovery = false;
         return std::nullopt;
@@ -7767,6 +7780,10 @@ namespace VDISPLAY_SUNSHINE {
                static_cast<unsigned long>(error_code));
         return std::nullopt;
       }
+
+      // The driver accepted a new display with this size. A reclaimed display never reaches here,
+      // so its earlier record stays valid.
+      posture::note_applied_size(posture_display_key, posture_size);
 
       // Publish the exact lease returned by the successful create before any
       // fallible validation. Rollback must be able to prove ownership even if

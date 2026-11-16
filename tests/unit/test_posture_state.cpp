@@ -19,13 +19,11 @@ namespace {
 }  // namespace
 
 TEST(PostureDisplayHandoff, NothingRecordedMeansDriverDefault) {
-  forget_all_displays();
   EXPECT_FALSE(desired_size(key_for(1)));
   EXPECT_FALSE(applied_size(key_for(1)));
 }
 
 TEST(PostureDisplayHandoff, DesiredSizeIsOverwrittenPerCreate) {
-  forget_all_displays();
   set_desired_size(key_for(2), tablet_16x9);
   EXPECT_EQ(desired_size(key_for(2)), tablet_16x9);
   set_desired_size(key_for(2), std::nullopt);
@@ -33,7 +31,6 @@ TEST(PostureDisplayHandoff, DesiredSizeIsOverwrittenPerCreate) {
 }
 
 TEST(PostureDisplayHandoff, AppliedStateDistinguishesUnknownFromDriverDefault) {
-  forget_all_displays();
   note_applied_size(key_for(3), std::nullopt);
   const auto applied = applied_size(key_for(3));
   ASSERT_TRUE(applied.has_value());
@@ -44,13 +41,20 @@ TEST(PostureDisplayHandoff, AppliedStateDistinguishesUnknownFromDriverDefault) {
   EXPECT_EQ(*applied_size(key_for(3)), std::optional<physical_size_t> {tablet_16x9});
 }
 
-TEST(PostureDisplayHandoff, ForgetDropsDesiredAndApplied) {
-  forget_all_displays();
+TEST(PostureDisplayHandoff, ForgetDropsAppliedButKeepsDesired) {
   set_desired_size(key_for(4), tablet_16x9);
   note_applied_size(key_for(4), tablet_16x9);
   forget_display(key_for(4));
-  EXPECT_FALSE(desired_size(key_for(4)));
+  EXPECT_EQ(desired_size(key_for(4)), tablet_16x9);
   EXPECT_FALSE(applied_size(key_for(4)));
+}
+
+TEST(PostureDisplayHandoff, ForgetAllDropsEveryAppliedRecord) {
+  note_applied_size(key_for(5), tablet_16x9);
+  note_applied_size(key_for(6), std::nullopt);
+  forget_all_displays();
+  EXPECT_FALSE(applied_size(key_for(5)));
+  EXPECT_FALSE(applied_size(key_for(6)));
 }
 
 TEST(PostureBoundary, UnknownAppliedStateNeverCrosses) {
@@ -133,7 +137,6 @@ TEST(PostureRuntimeUpdate, NewLaunchClearsPending) {
 }
 
 TEST(PostureStatus, ReportsTheDisplaySizeOwnedByTheClient) {
-  forget_all_displays();
   record_launch("state-test-status", parse_hints("", "", "", "", true), 1920, 1080);
   set_desired_size(key_for(9), tablet_16x9, "state-test-status");
   note_applied_size(key_for(9), tablet_16x9);
@@ -149,7 +152,6 @@ TEST(PostureStatus, ReportsTheDisplaySizeOwnedByTheClient) {
 }
 
 TEST(PostureStatus, AppliedStateIsUnknownWithoutAnOwnedDisplay) {
-  forget_all_displays();
   record_launch("state-test-nodisplay", hints_t {}, 1920, 1080);
   const auto status = status_for_client("state-test-nodisplay");
   ASSERT_TRUE(status);

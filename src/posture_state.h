@@ -42,10 +42,10 @@ namespace posture {
   /// Size a display was created with: outer nullopt when unknown, inner nullopt for the driver default.
   std::optional<std::optional<physical_size_t>> applied_size(const display_key_t &key);
 
-  /// Drop the record of a removed display.
+  /// A display was removed: forget the size it was created with. The desired size stays for the next create.
   void forget_display(const display_key_t &key);
 
-  /// Drop every display record.
+  /// Every display was removed: forget all created-with sizes.
   void forget_all_displays();
 
   /**

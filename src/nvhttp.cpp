@@ -2067,6 +2067,15 @@ namespace nvhttp {
             }
           }
           VDISPLAY::setWatchdogFeedingEnabled(true);
+          // Posture size policy: the display backend reads this by GUID when it creates the display.
+          // An empty result leaves the driver's default size, exactly as before.
+          posture::display_key_t posture_display_key {};
+          std::memcpy(posture_display_key.data(), &virtual_display_guid, posture_display_key.size());
+          posture::set_desired_size(
+            posture_display_key,
+            posture::derive_physical_size(launch_session->client_posture, static_cast<int>(recovery_params.width), static_cast<int>(recovery_params.height)),
+            launch_session->client_uuid
+          );
           const char *hdr_profile = launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr;
           auto display_info = VDISPLAY::createVirtualDisplay(
             display_uuid_source.c_str(),

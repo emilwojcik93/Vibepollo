@@ -76,12 +76,18 @@ namespace posture {
 
   void forget_display(const display_key_t &key) {
     std::lock_guard lock {state_mutex};
-    displays.erase(key);
+    if (const auto it = displays.find(key); it != displays.end()) {
+      it->second.applied_known = false;
+      it->second.applied.reset();
+    }
   }
 
   void forget_all_displays() {
     std::lock_guard lock {state_mutex};
-    displays.clear();
+    for (auto &[key, display] : displays) {
+      display.applied_known = false;
+      display.applied.reset();
+    }
   }
 
   bool display_crosses_boundary(const std::optional<std::optional<physical_size_t>> &applied, const hints_t &hints) {
