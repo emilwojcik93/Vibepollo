@@ -54,6 +54,8 @@ namespace {
   std::atomic<long long> last_touch_ticks {0};
   std::atomic<bool> stop_requested {false};
   FILE *log_file = nullptr;
+  bool trace = true;
+  void T(const char *what);
 
   void log_line(const char *text, long value = 0) {
     if (!log_file) {
@@ -76,13 +78,24 @@ namespace {
     return result;
   }
 
+  void T(const char *what) {
+    if (trace && log_file) {
+      std::fprintf(log_file, "T %s\n", what);
+      std::fflush(log_file);
+    }
+  }
+
   bool osk_visible() {
+    T("osk_visible enter");
     ComPtr<IFrameworkInputPaneLocal> pane = create_instance<IFrameworkInputPaneLocal>(clsid_input_pane, CLSCTX_INPROC_SERVER, iid_input_pane);
     if (!pane) {
       return false;
     }
+    T("pane created");
     RECT rect {};
-    if (FAILED(pane->Location(&rect))) {
+    const HRESULT loc = pane->Location(&rect);
+    T("location returned");
+    if (FAILED(loc)) {
       return false;
     }
     return rect.right - rect.left > 0 && rect.bottom - rect.top > 0;
@@ -98,14 +111,17 @@ namespace {
   }
 
   bool focused_element_is_editable(IUIAutomation *automation) {
+    T("focused enter");
     ComPtr<IUIAutomationElement> element;
     if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
       return false;
     }
+    T("got element");
     CONTROLTYPEID type = 0;
     if (FAILED(element->get_CurrentControlType(&type))) {
       return false;
     }
+    T("got control type");
     if (type != UIA_EditControlTypeId && type != UIA_DocumentControlTypeId) {
       return false;
     }
@@ -114,6 +130,7 @@ namespace {
     if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, iid_value_pattern, &pattern)) && pattern) {
       value.Attach(static_cast<IUIAutomationValuePattern *>(pattern));
     }
+    T("pattern queried");
     if (value) {
       BOOL read_only = FALSE;
       if (SUCCEEDED(value->get_CurrentIsReadOnly(&read_only))) {
@@ -187,7 +204,10 @@ int main(int argc, char **argv) {
       first_poll = false;
     }
     const bool editable = focused_element_is_editable(automation.Get());
+    T("editable done");
     const bool visible = osk_visible();
+    T("visible done");
+    trace = false;
     if (editable) {
       hide_pending = false;
       if (!visible && recent && !last_editable) {
