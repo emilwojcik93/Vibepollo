@@ -48,7 +48,6 @@ namespace touch_ux {
     // optional shell headers the toolchain ships.
     const GUID clsid_cuiautomation = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
     const GUID iid_iuiautomation = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
-    const GUID iid_focus_handler = {0xc270f6b5, 0x5c69, 0x4290, {0x97, 0x45, 0x7a, 0x7f, 0x97, 0x16, 0x94, 0x68}};
     const GUID iid_value_pattern = {0xa94cd8b1, 0x0844, 0x4cd6, {0x9d, 0x2d, 0x64, 0x05, 0x37, 0xab, 0x39, 0xe9}};
 
     const GUID clsid_tip_invocation = {0x4ce576fa, 0x83dc, 0x4f88, {0x95, 0x1c, 0x9d, 0x07, 0x82, 0xb4, 0xe3, 0x76}};
@@ -73,14 +72,8 @@ namespace touch_ux {
 
     std::atomic<long long> last_touch_ticks {0};  // steady_clock ticks, 0 = never
 
-    struct focus_event_t {
-      bool editable = false;
-      bool pending = false;
-    };
-
     std::mutex event_mutex;
     std::condition_variable event_cv;
-    focus_event_t pending_event;
     bool stop_requested = false;
 
     std::filesystem::path journal_path() {
@@ -170,52 +163,21 @@ namespace touch_ux {
       return type == UIA_EditControlTypeId;
     }
 
-    class focus_handler_t final: public IUIAutomationFocusChangedEventHandler {
-    public:
-      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {
-        if (!object) {
-          return E_POINTER;
-        }
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, iid_focus_handler)) {
-          *object = static_cast<IUIAutomationFocusChangedEventHandler *>(this);
-          AddRef();
-          return S_OK;
-        }
-        *object = nullptr;
-        return E_NOINTERFACE;
+    /// Poll the focused UI Automation element. No COM callback object is registered; every call is
+    /// a plain synchronous call made from the worker thread.
+    bool focused_element_is_editable(IUIAutomation *automation) {
+      ComPtr<IUIAutomationElement> element;
+      if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
+        return false;
       }
+      return element_is_editable(element.Get());
+    }
 
-      ULONG STDMETHODCALLTYPE AddRef() override {
-        return ++refs_;
-      }
-
-      ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG remaining = --refs_;
-        if (remaining == 0) {
-          delete this;
-        }
-        return remaining;
-      }
-
-      HRESULT STDMETHODCALLTYPE HandleFocusChangedEvent(IUIAutomationElement *sender) override {
-        if (!sender) {
-          return S_OK;
-        }
-        const bool editable = element_is_editable(sender);
-        {
-          std::lock_guard lg {event_mutex};
-          pending_event = {editable, true};
-        }
-        event_cv.notify_one();
-        return S_OK;
-      }
-
-    private:
-      std::atomic<ULONG> refs_ {1};
-    };
+    constexpr auto poll_interval = 200ms;
 
     void worker_main(bool keyboard_assist, bool taskbar_autohide) {
-      const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+      // Apartment thread: the shell objects used below are apartment-threaded.
+      const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
       const bool co_ok = SUCCEEDED(co);
 
       bool taskbar_changed = false;
@@ -224,88 +186,72 @@ namespace touch_ux {
       }
 
       ComPtr<IUIAutomation> automation;
-      ComPtr<focus_handler_t> handler;
       if (keyboard_assist) {
         if (SUCCEEDED(CoCreateInstance(clsid_cuiautomation, nullptr, CLSCTX_INPROC_SERVER, iid_iuiautomation, reinterpret_cast<void **>(automation.GetAddressOf())))) {
-          handler.Attach(new focus_handler_t());
-          if (FAILED(automation->AddFocusChangedEventHandler(nullptr, handler.Get()))) {
-            BOOST_LOG(warning) << "touch_ux: could not register the focus handler, keyboard assist disabled"sv;
-            handler.Reset();
-          } else {
-            BOOST_LOG(info) << "touch_ux: touch keyboard assist active"sv;
-          }
+          BOOST_LOG(info) << "touch_ux: touch keyboard assist active"sv;
         } else {
           BOOST_LOG(warning) << "touch_ux: UI Automation unavailable, keyboard assist disabled"sv;
         }
       }
 
       bool we_showed = false;
+      bool last_editable = false;
       std::optional<std::chrono::steady_clock::time_point> hide_at;
 
       std::unique_lock lock {event_mutex};
       while (!stop_requested) {
-        if (hide_at) {
-          event_cv.wait_until(lock, *hide_at, [] {
-            return stop_requested || pending_event.pending;
-          });
-        } else {
-          event_cv.wait(lock, [] {
-            return stop_requested || pending_event.pending;
-          });
-        }
+        event_cv.wait_for(lock, poll_interval, [] {
+          return stop_requested;
+        });
         if (stop_requested) {
           break;
         }
+        if (!automation) {
+          continue;
+        }
+        lock.unlock();
 
         const auto now = std::chrono::steady_clock::now();
-        if (pending_event.pending) {
-          const focus_event_t event = pending_event;
-          pending_event.pending = false;
-          lock.unlock();
+        const long long ticks = last_touch_ticks.load();
+        const bool touch_recent = ticks != 0 && touch_ux::touch_is_recent(std::chrono::steady_clock::time_point {std::chrono::steady_clock::duration {ticks}}, now);
 
-          touch_ux::focus_state_t state;
-          state.editable = event.editable;
-          state.osk_visible = osk_visible();
-          state.we_showed = we_showed;
-          const long long ticks = last_touch_ticks.load();
-          state.touch_recent = ticks != 0 && touch_ux::touch_is_recent(std::chrono::steady_clock::time_point {std::chrono::steady_clock::duration {ticks}}, now);
+        // Only look at the focus while it can matter: right after touch, or while our keyboard is up.
+        if (touch_recent || we_showed) {
+          const bool editable = focused_element_is_editable(automation.Get());
+          const bool visible = osk_visible();
 
-          switch (touch_ux::decide(state)) {
-            case touch_ux::osk_action_e::show:
+          if (editable) {
+            hide_at.reset();
+            if (!visible && touch_recent && !last_editable) {
+              // Focus just moved onto a text field after touch.
               osk_toggle();
               we_showed = true;
+            }
+          } else if (we_showed) {
+            if (!visible) {
+              we_showed = false;  // the user closed it
               hide_at.reset();
-              break;
-            case touch_ux::osk_action_e::schedule_hide:
+            } else if (!hide_at) {
               hide_at = now + touch_ux::hide_delay;
-              break;
-            case touch_ux::osk_action_e::forget:
+            } else if (now >= *hide_at) {
+              osk_toggle();
               we_showed = false;
               hide_at.reset();
-              break;
-            case touch_ux::osk_action_e::none:
-              if (state.editable) {
-                hide_at.reset();
-              }
-              break;
+            }
           }
-          lock.lock();
-        } else if (hide_at && now >= *hide_at) {
+          last_editable = editable;
+        } else {
+          last_editable = false;
           hide_at.reset();
-          lock.unlock();
-          if (we_showed && osk_visible()) {
-            osk_toggle();
-          }
-          we_showed = false;
-          lock.lock();
         }
+
+        lock.lock();
       }
       lock.unlock();
 
-      if (automation && handler) {
-        automation->RemoveFocusChangedEventHandler(handler.Get());
+      if (we_showed && osk_visible()) {
+        osk_toggle();
       }
-      handler.Reset();
       automation.Reset();
 
       if (taskbar_changed) {
@@ -330,7 +276,6 @@ namespace touch_ux {
     {
       std::lock_guard ev {event_mutex};
       stop_requested = false;
-      pending_event = {};
     }
     worker = std::thread(worker_main, keyboard_assist, taskbar_autohide);
   }
