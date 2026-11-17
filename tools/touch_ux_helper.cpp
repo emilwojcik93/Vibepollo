@@ -49,6 +49,7 @@ using touch_ux_com::ITipInvocationLocal;
 namespace {
   const GUID clsid_cuiautomation = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
   const GUID iid_iuiautomation = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
+  const GUID iid_focus_handler = {0xc270f6b5, 0x5c69, 0x4290, {0x97, 0x45, 0x7a, 0x7f, 0x97, 0x16, 0x94, 0x68}};
   const GUID iid_value_pattern = {0xa94cd8b1, 0x0844, 0x4cd6, {0x9d, 0x2d, 0x64, 0x05, 0x37, 0xab, 0x39, 0xe9}};
   const GUID clsid_tip_invocation = {0x4ce576fa, 0x83dc, 0x4f88, {0x95, 0x1c, 0x9d, 0x07, 0x82, 0xb4, 0xe3, 0x76}};
   const GUID iid_tip_invocation = {0x37c994e7, 0x432b, 0x4834, {0xa2, 0xf7, 0xdc, 0xe1, 0xf1, 0x3b, 0x83, 0x4b}};
@@ -140,6 +141,58 @@ namespace {
     return type == UIA_EditControlTypeId;
   }
 
+  bool focused_element_is_editable(IUIAutomation *automation) {
+    ComPtr<IUIAutomationElement> element;
+    if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
+      return false;
+    }
+    return element_is_editable(element.Get());
+  }
+
+  /// Focus-changed events. Frameworks such as WPF only report the focused control inside a window
+  /// to clients that listen for focus events, so polling alone sees just the top-level window.
+  std::atomic<bool> have_focus_event {false};
+  std::atomic<bool> focus_event_editable {false};
+
+  class focus_handler_t final: public IUIAutomationFocusChangedEventHandler {
+  public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {
+      if (!object) {
+        return E_POINTER;
+      }
+      if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, iid_focus_handler)) {
+        *object = static_cast<IUIAutomationFocusChangedEventHandler *>(this);
+        AddRef();
+        return S_OK;
+      }
+      *object = nullptr;
+      return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+      return ++refs_;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+      const ULONG remaining = --refs_;
+      if (remaining == 0) {
+        delete this;
+      }
+      return remaining;
+    }
+
+    HRESULT STDMETHODCALLTYPE HandleFocusChangedEvent(IUIAutomationElement *sender) override {
+      if (sender) {
+        focus_event_editable = element_is_editable(sender);
+        have_focus_event = true;
+      }
+      return S_OK;
+    }
+
+  private:
+    std::atomic<ULONG> refs_ {1};
+  };
+
   DWORD WINAPI stdin_reader(LPVOID) {
     HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
     char buffer[64];
@@ -177,6 +230,11 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  ComPtr<focus_handler_t> handler;
+  handler.Attach(new focus_handler_t());
+  const HRESULT add = automation->AddFocusChangedEventHandler(nullptr, handler.Get());
+  log_line("focus handler", add);
+
   HANDLE reader = CreateThread(nullptr, 0, stdin_reader, nullptr, 0, nullptr);
   if (!reader) {
     return 3;
@@ -192,7 +250,13 @@ int main(int argc, char **argv) {
   bool hide_pending = false;
 
   while (!stop_requested) {
-    Sleep(static_cast<DWORD>(poll_interval.count()));
+    // Pump messages so the focus handler (an apartment object) is called, and wait one poll interval.
+    MsgWaitForMultipleObjects(0, nullptr, FALSE, static_cast<DWORD>(poll_interval.count()), QS_ALLINPUT);
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
     const auto now = std::chrono::steady_clock::now();
     const bool recent = touch_is_recent(now);
     if (!recent && !we_showed) {
@@ -204,7 +268,7 @@ int main(int argc, char **argv) {
       log_line("first poll");
       first_poll = false;
     }
-    const bool editable = focused_element_is_editable(automation.Get());
+    const bool editable = have_focus_event ? focus_event_editable.load() : focused_element_is_editable(automation.Get());
     const bool visible = osk_visible();
     const long state_key = (editable ? 1 : 0) | (visible ? 2 : 0) | (recent ? 4 : 0) | (we_showed ? 8 : 0);
     if (state_key != last_state_key || last_control_type != last_logged_type) {
@@ -244,6 +308,8 @@ int main(int argc, char **argv) {
     osk_toggle();
   }
   log_line("exit");
+  automation->RemoveFocusChangedEventHandler(handler.Get());
+  handler.Reset();
   automation.Reset();
   CoUninitialize();
   CloseHandle(reader);
