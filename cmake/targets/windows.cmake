@@ -119,7 +119,7 @@ add_custom_command(
 )
 add_custom_target(build_playnite_plugin DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_OUTPUT_FILES})
 add_dependencies(sunshine build_playnite_plugin)
-add_dependencies(sunshine sunshine_end_stream_hotkey)
+add_dependencies(sunshine sunshine_end_stream_hotkey sunshine_touch_ux)
 
 # Ensure the Windows display helper is built and staged under the Sunshine tools
 # directory so the runtime launcher can find it reliably.
@@ -165,6 +165,7 @@ foreach(_packaged_target IN ITEMS
         playnite-launcher
         sunshine_wgc_capture
         sunshine_end_stream_hotkey
+        sunshine_touch_ux
         sunshine_display_helper)
     if(TARGET "${_packaged_target}")
         list(APPEND SUNSHINE_WINDOWS_PACKAGED_TARGETS "${_packaged_target}")

@@ -162,6 +162,7 @@ foreach(_sunshine_versioned_tool IN ITEMS
         playnite-launcher
         sunshine_wgc_capture
         sunshine_end_stream_hotkey
+        sunshine_touch_ux
         sunshine_display_helper)
     if(TARGET "${_sunshine_versioned_tool}")
         sunshine_add_windows_versioninfo("${_sunshine_versioned_tool}")

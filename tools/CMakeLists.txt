@@ -120,6 +120,13 @@ target_link_libraries(sunshine_end_stream_hotkey PRIVATE user32 wtsapi32)
 target_compile_definitions(sunshine_end_stream_hotkey PRIVATE _WIN32_WINNT=0x0602)
 target_compile_options(sunshine_end_stream_hotkey PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
+# Touch keyboard assist: runs in the interactive session while a touch-primary client streams. Own
+# process so a fault in UI Automation or the shell can never take the streaming host down.
+add_executable(sunshine_touch_ux touch_ux_helper.cpp)
+target_link_libraries(sunshine_touch_ux PRIVATE ole32 oleaut32 uuid user32)
+target_compile_definitions(sunshine_touch_ux PRIVATE _WIN32_WINNT=0x0A00)
+target_compile_options(sunshine_touch_ux PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
 # Display settings helper: detached helper that applies/reverts display settings via IPC.
 # One exe hosts both engines (legacy + v2), selected by --engine= or persisted state.
 add_executable(sunshine_display_helper
