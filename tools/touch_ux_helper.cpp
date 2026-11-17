@@ -63,9 +63,22 @@ namespace {
     std::fflush(log_file);
   }
 
+  /// Create a COM object through a void* out parameter and adopt it. Casting a typed interface
+  /// pointer's address to void** instead breaks strict aliasing, and optimized builds then call
+  /// through a stale null pointer.
+  template<class T>
+  ComPtr<T> create_instance(const GUID &clsid, DWORD context, const GUID &iid) {
+    void *raw = nullptr;
+    ComPtr<T> result;
+    if (SUCCEEDED(CoCreateInstance(clsid, nullptr, context, iid, &raw)) && raw) {
+      result.Attach(static_cast<T *>(raw));
+    }
+    return result;
+  }
+
   bool osk_visible() {
-    ComPtr<IFrameworkInputPaneLocal> pane;
-    if (FAILED(CoCreateInstance(clsid_input_pane, nullptr, CLSCTX_INPROC_SERVER, iid_input_pane, reinterpret_cast<void **>(pane.GetAddressOf())))) {
+    ComPtr<IFrameworkInputPaneLocal> pane = create_instance<IFrameworkInputPaneLocal>(clsid_input_pane, CLSCTX_INPROC_SERVER, iid_input_pane);
+    if (!pane) {
       return false;
     }
     RECT rect {};
@@ -76,8 +89,8 @@ namespace {
   }
 
   void osk_toggle() {
-    ComPtr<ITipInvocationLocal> tip;
-    if (FAILED(CoCreateInstance(clsid_tip_invocation, nullptr, CLSCTX_LOCAL_SERVER, iid_tip_invocation, reinterpret_cast<void **>(tip.GetAddressOf())))) {
+    ComPtr<ITipInvocationLocal> tip = create_instance<ITipInvocationLocal>(clsid_tip_invocation, CLSCTX_LOCAL_SERVER, iid_tip_invocation);
+    if (!tip) {
       log_line("touch keyboard object unavailable");
       return;
     }
@@ -96,9 +109,12 @@ namespace {
     if (type != UIA_EditControlTypeId && type != UIA_DocumentControlTypeId) {
       return false;
     }
+    void *pattern = nullptr;
     ComPtr<IUIAutomationValuePattern> value;
-    const HRESULT hr = element->GetCurrentPatternAs(UIA_ValuePatternId, iid_value_pattern, reinterpret_cast<void **>(value.GetAddressOf()));
-    if (SUCCEEDED(hr) && value) {
+    if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, iid_value_pattern, &pattern)) && pattern) {
+      value.Attach(static_cast<IUIAutomationValuePattern *>(pattern));
+    }
+    if (value) {
       BOOL read_only = FALSE;
       if (SUCCEEDED(value->get_CurrentIsReadOnly(&read_only))) {
         return !read_only;
@@ -139,10 +155,9 @@ int main(int argc, char **argv) {
   const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   log_line("coinit", co);
 
-  ComPtr<IUIAutomation> automation;
-  const HRESULT hr = CoCreateInstance(clsid_cuiautomation, nullptr, CLSCTX_INPROC_SERVER, iid_iuiautomation, reinterpret_cast<void **>(automation.GetAddressOf()));
-  log_line("uia create", hr);
-  if (FAILED(hr)) {
+  ComPtr<IUIAutomation> automation = create_instance<IUIAutomation>(clsid_cuiautomation, CLSCTX_INPROC_SERVER, iid_iuiautomation);
+  log_line("uia create", automation ? 0 : 1);
+  if (!automation) {
     return 2;
   }
 
