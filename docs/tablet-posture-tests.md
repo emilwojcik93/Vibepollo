@@ -37,8 +37,7 @@ back to what they were (normally absent), and `tablet_posture.journal` in the co
 ## Tests
 
 1. **Override, no client.** Before: `applied` laptop. POST `slate`: within 2 s `applied` slate, `ConvertibleSlateMode` 0, taskbar
-   changes to tablet layout. POST `laptop`: back within 3 s (not earlier: 3 s grace only applies to client driven changes;
-   override flips apply the same worker, expect up to 3 s). POST `auto`: stays laptop with no client.
+   changes to tablet layout. POST `laptop`: `applied` laptop after the 3 s return grace. POST `auto`: stays laptop with no client.
 2. **A55 launch.** Stream Desktop. `clients[]` shows the A55 with `touch_primary: true`, `applied` slate, tap a Windows Terminal
    prompt: docked keyboard. Stop the stream: laptop 3 s later, values restored.
 3. **Stock client (ROG Ally, Artemis).** Client must be flagged `touch_device` (paired client list). Same as test 2.
