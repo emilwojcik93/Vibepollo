@@ -22,6 +22,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <cwctype>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
@@ -109,6 +111,41 @@ namespace {
     tip->Toggle(GetDesktopWindow());
   }
 
+  /// True when the element lives in a process of the Windows touch keyboard itself. Its windows take
+  /// focus while it is up; that must not count as focus leaving the text field.
+  bool element_is_keyboard(IUIAutomationElement *element) {
+    static int cached_pid = 0;
+    static bool cached_result = false;
+    int pid = 0;
+    if (FAILED(element->get_CurrentProcessId(&pid)) || pid <= 0) {
+      return false;
+    }
+    if (pid == cached_pid) {
+      return cached_result;
+    }
+    bool result = false;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (process) {
+      wchar_t path[MAX_PATH] = {};
+      DWORD length = MAX_PATH;
+      if (QueryFullProcessImageNameW(process, 0, path, &length)) {
+        std::wstring name(path, length);
+        const auto slash = name.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+          name = name.substr(slash + 1);
+        }
+        std::transform(name.begin(), name.end(), name.begin(), [](wchar_t c) {
+          return static_cast<wchar_t>(std::towlower(c));
+        });
+        result = name == L"textinputhost.exe" || name == L"tabtip.exe" || name == L"tabtip32.exe" || name == L"osk.exe";
+      }
+      CloseHandle(process);
+    }
+    cached_pid = pid;
+    cached_result = result;
+    return result;
+  }
+
   bool element_is_editable(IUIAutomationElement *element) {
     CONTROLTYPEID type = 0;
     if (FAILED(element->get_CurrentControlType(&type))) {
@@ -137,9 +174,15 @@ namespace {
     return type == UIA_EditControlTypeId;
   }
 
-  bool focused_element_is_editable(IUIAutomation *automation) {
+  /// Editable state of the focused element; `ignored` is set when the keyboard's own window has focus.
+  bool focused_element_is_editable(IUIAutomation *automation, bool &ignored) {
+    ignored = false;
     ComPtr<IUIAutomationElement> element;
     if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
+      return false;
+    }
+    if (element_is_keyboard(element.Get())) {
+      ignored = true;
       return false;
     }
     return element_is_editable(element.Get());
@@ -178,7 +221,7 @@ namespace {
     }
 
     HRESULT STDMETHODCALLTYPE HandleFocusChangedEvent(IUIAutomationElement *sender) override {
-      if (sender) {
+      if (sender && !element_is_keyboard(sender)) {
         focus_event_editable = element_is_editable(sender);
         have_focus_event = true;
       }
@@ -264,7 +307,11 @@ int main(int argc, char **argv) {
       log_line("first poll");
       first_poll = false;
     }
-    const bool editable = have_focus_event ? focus_event_editable.load() : focused_element_is_editable(automation.Get());
+    bool ignored = false;
+    bool editable = have_focus_event ? focus_event_editable.load() : focused_element_is_editable(automation.Get(), ignored);
+    if (ignored) {
+      editable = last_editable;  // the keyboard's own window has focus: keep the previous answer
+    }
     const bool visible = osk_visible();
     const long state_key = (editable ? 1 : 0) | (visible ? 2 : 0) | (recent ? 4 : 0) | (we_showed ? 8 : 0);
     if (state_key != last_state_key || last_control_type != last_logged_type) {
