@@ -211,3 +211,17 @@ TEST(PostureRuntimeUpdate, KeyboardFlipOfATouchClientKeepsTheDisplay) {
   EXPECT_FALSE(attached.boundary_crossed);
   EXPECT_EQ(attached.status, status_e::unchanged);
 }
+
+TEST(PostureRuntimeUpdate, DisplayChangeIsRelativeToTheLaunchDisplay) {
+  const std::string client = "display-change-client";
+  record_launch(client, parse_hints("laptop", ""), 1920, 1080);  // no touch: driver default size
+  const auto to_tablet = apply_runtime_update(client, parse_hints("tablet", "1"), t0);
+  EXPECT_TRUE(to_tablet.display_change);
+  const auto back = apply_runtime_update(client, parse_hints("laptop", ""), t0 + std::chrono::seconds {2});
+  EXPECT_TRUE(back.boundary_crossed);
+  EXPECT_FALSE(back.display_change);  // the launch display fits again: no restart needed
+
+  record_launch(client, parse_hints("laptop", "1"), 1920, 1280);  // touch-capable from the start
+  const auto flip = apply_runtime_update(client, parse_hints("tablet", "1"), t0 + std::chrono::seconds {4});
+  EXPECT_FALSE(flip.display_change);
+}

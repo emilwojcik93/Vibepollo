@@ -73,6 +73,9 @@ namespace posture {
     status_e status = status_e::no_session;
     /// True when the change flips between "no size" and "a size".
     bool boundary_crossed = false;
+    /// True when the display created at launch or resume no longer fits the latest hints ("no size" versus "a size").
+    /// Stays true until the next launch or resume, and goes back to false when the client returns to its launch state.
+    bool display_change = false;
     std::optional<physical_size_t> previous;
     std::optional<physical_size_t> current;
   };

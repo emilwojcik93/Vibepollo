@@ -131,8 +131,9 @@ needs the "View stream" permission and an active session. Calls closer than one 
 | No active session for the client | `status_code="404"` |
 | Closer than one second to the previous call | `status_code="429"` |
 
-The response also carries `display_change`: `1` when the new state needs a different virtual display
-(the client became or stopped being touch-capable), else `0`. A client should restart its stream only
+The response also carries `display_change`: `1` when the display created at launch or resume no longer
+fits the latest state (the client became or stopped being touch-capable), else `0`. It returns to `0` when
+the client goes back to its launch state. A client should restart its stream only
 on `1`; clients that ignore the attribute keep working.
 
 The display size follows touch *capability* (a tablet, handheld or phone class, `clientTouch=1`, or the

@@ -26,6 +26,7 @@ namespace posture {
       int height_px = 0;
       int diagonal_mm = default_touch_diagonal_mm;
       bool update_pending = false;
+      bool launch_sized = false;  ///< The display created at launch or resume got a touch size.
       std::optional<std::chrono::steady_clock::time_point> last_update;
     };
 
@@ -117,6 +118,7 @@ namespace posture {
     entry.height_px = height_px;
     entry.diagonal_mm = sanitize_touch_diagonal_mm(diagonal_mm);
     entry.update_pending = false;
+    entry.launch_sized = derive_physical_size(hints, width_px, height_px, entry.diagonal_mm).has_value();
   }
 
   update_result_t apply_runtime_update(const std::string &client_uuid, const hints_t &hints, std::chrono::steady_clock::time_point now) {
@@ -136,6 +138,7 @@ namespace posture {
     result.previous = derive_physical_size(entry.hints, entry.width_px, entry.height_px, entry.diagonal_mm);
     result.current = derive_physical_size(hints, entry.width_px, entry.height_px, entry.diagonal_mm);
     result.boundary_crossed = result.previous.has_value() != result.current.has_value();
+    result.display_change = entry.launch_sized != result.current.has_value();
     result.status = result.previous == result.current ? update_result_t::status_e::unchanged : update_result_t::status_e::changed;
 
     entry.hints = hints;

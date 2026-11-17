@@ -7369,7 +7369,7 @@ launch_session->exact_target_hold.reset();
     }
     // Tells the client whether the new state needs a different virtual display, i.e. whether a
     // stream restart is worth it. The host mode (desktop or tablet) has already been switched live.
-    tree.put("root.<xmlattr>.display_change", update.boundary_crossed ? 1 : 0);
+    tree.put("root.<xmlattr>.display_change", update.display_change ? 1 : 0);
     tree.put("root.<xmlattr>.status_code", 200);
   }
 
