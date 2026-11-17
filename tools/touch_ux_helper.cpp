@@ -27,6 +27,25 @@
 using Microsoft::WRL::ComPtr;
 using namespace std::chrono_literals;
 
+// Interfaces implemented by the shell, not by this program. They must have external linkage: in an
+// anonymous namespace the compiler sees no possible implementer and optimizes calls through them
+// into undefined behavior (-O2 and up jump to address zero of the image).
+namespace touch_ux_com {
+struct ITipInvocationLocal: IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
+};
+
+struct IFrameworkInputPaneLocal: IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
+};
+}  // namespace touch_ux_com
+
+using touch_ux_com::IFrameworkInputPaneLocal;
+using touch_ux_com::ITipInvocationLocal;
+
 namespace {
   const GUID clsid_cuiautomation = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
   const GUID iid_iuiautomation = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
@@ -35,17 +54,6 @@ namespace {
   const GUID iid_tip_invocation = {0x37c994e7, 0x432b, 0x4834, {0xa2, 0xf7, 0xdc, 0xe1, 0xf1, 0x3b, 0x83, 0x4b}};
   const GUID clsid_input_pane = {0xd5120aa3, 0x46ba, 0x44c5, {0x82, 0x2d, 0xca, 0x80, 0x92, 0xc1, 0xfc, 0x72}};
   const GUID iid_input_pane = {0x5752238b, 0x24f0, 0x495a, {0x82, 0xf1, 0x2f, 0xd5, 0x93, 0x05, 0x67, 0x96}};
-
-  struct ITipInvocationLocal: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
-  };
-
-  struct IFrameworkInputPaneLocal: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
-  };
 
   constexpr auto touch_recent_window = 2500ms;
   constexpr auto hide_delay = 350ms;
