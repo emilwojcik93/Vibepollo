@@ -24,6 +24,9 @@ namespace tablet_posture {
 
     /// Undo a previous host process' leftovers; with `resync` also put a freshly booted indicator back to laptop. Implemented per platform.
     void recover(bool resync);
+
+    /// Undo what a previous host process left behind for the gaming posture. Implemented per platform.
+    void recover_gaming();
   }  // namespace backend
 
 #ifndef _WIN32
@@ -37,6 +40,8 @@ namespace tablet_posture {
     }
 
     void recover(bool) {}
+
+    void recover_gaming() {}
   }  // namespace backend
 #endif
 
@@ -217,6 +222,7 @@ namespace tablet_posture {
   void recover() {
     std::lock_guard lock {mutex};
     backend::recover(config::video.touch_tablet_mode);
+    backend::recover_gaming();
   }
 
   void shutdown() {
