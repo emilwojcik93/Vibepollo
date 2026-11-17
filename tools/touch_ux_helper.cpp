@@ -58,7 +58,7 @@ namespace {
   const GUID clsid_input_pane = {0xd5120aa3, 0x46ba, 0x44c5, {0x82, 0x2d, 0xca, 0x80, 0x92, 0xc1, 0xfc, 0x72}};
   const GUID iid_input_pane = {0x5752238b, 0x24f0, 0x495a, {0x82, 0xf1, 0x2f, 0xd5, 0x93, 0x05, 0x67, 0x96}};
 
-  constexpr auto touch_recent_window = 2500ms;
+  constexpr auto touch_recent_window = 5000ms;
   constexpr auto hide_delay = 350ms;
   constexpr auto poll_interval = 200ms;
 
@@ -175,8 +175,9 @@ namespace {
   }
 
   /// Editable state of the focused element; `ignored` is set when the keyboard's own window has focus.
-  bool focused_element_is_editable(IUIAutomation *automation, bool &ignored) {
+  bool focused_element_is_editable(IUIAutomation *automation, bool &ignored, CONTROLTYPEID &type) {
     ignored = false;
+    type = 0;
     ComPtr<IUIAutomationElement> element;
     if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
       return false;
@@ -185,7 +186,9 @@ namespace {
       ignored = true;
       return false;
     }
-    return element_is_editable(element.Get());
+    const bool editable = element_is_editable(element.Get());
+    type = last_control_type;
+    return editable;
   }
 
   /// Focus-changed events. Frameworks such as WPF only report the focused control inside a window
@@ -312,10 +315,18 @@ int main(int argc, char **argv) {
       log_line("first poll");
       first_poll = false;
     }
+    // Polling sees XAML and Win32 controls. Frameworks that expose their inner controls only to clients
+    // listening for focus events (WPF) show up as the top-level window when polled; use the event then.
     bool ignored = false;
-    bool editable = have_focus_event ? focus_event_editable.load() : focused_element_is_editable(automation.Get(), ignored);
+    CONTROLTYPEID polled_type = 0;
+    const bool polled = focused_element_is_editable(automation.Get(), ignored, polled_type);
+    bool editable = false;
     if (ignored) {
       editable = last_editable;  // the keyboard's own window has focus: keep the previous answer
+    } else if (polled) {
+      editable = true;
+    } else if (polled_type == UIA_WindowControlTypeId && have_focus_event) {
+      editable = focus_event_editable.load();
     }
     const bool visible = osk_visible();
     const long state_key = (editable ? 1 : 0) | (visible ? 2 : 0) | (recent ? 4 : 0) | (we_showed ? 8 : 0);
