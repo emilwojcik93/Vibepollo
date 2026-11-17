@@ -30,7 +30,6 @@
 #include <winsock2.h>
 #include <windows.h>
 
-#include <newdev.h>
 #include <setupapi.h>
 
 // local includes
@@ -58,6 +57,8 @@ namespace tablet_posture::backend {
     constexpr auto priority_control = L"SYSTEM\\CurrentControlSet\\Control\\PriorityControl";
     constexpr auto convertibility_value = L"ConvertibilityEnabled";
     constexpr auto ignore_display_value = L"CSMIgnoreDisplayConfig";
+
+    constexpr DWORD install_flag_force = 0x00000001;  // INSTALLFLAG_FORCE
 
     constexpr unsigned char laptop_byte = 1;
     constexpr unsigned char slate_byte = 0;
@@ -95,25 +96,40 @@ namespace tablet_posture::backend {
       if (set == INVALID_HANDLE_VALUE) {
         return false;
       }
-      SP_DEVINFO_DATA info {};
-      info.cbSize = sizeof(info);
-      bool ok = SetupDiCreateDeviceInfoW(set, L"HIDClass", &hid_class, L"Vibepollo laptop/slate indicator", nullptr, DICD_GENERATE_ID, &info);
+      SP_DEVINFO_DATA device_info {};
+      device_info.cbSize = sizeof(device_info);
+      bool ok = SetupDiCreateDeviceInfoW(set, L"HIDClass", &hid_class, L"Vibepollo laptop/slate indicator", nullptr, DICD_GENERATE_ID, &device_info);
       if (ok) {
         std::array<wchar_t, 16> ids {};
         wcscpy(ids.data(), indicator_hardware_id);  // double-NUL terminated multi-string
-        ok = SetupDiSetDeviceRegistryPropertyW(set, &info, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.data()), static_cast<DWORD>(ids.size() * sizeof(wchar_t)));
+        ok = SetupDiSetDeviceRegistryPropertyW(set, &device_info, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.data()), static_cast<DWORD>(ids.size() * sizeof(wchar_t)));
       }
       if (ok) {
-        ok = SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &info);
+        ok = SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &device_info);
       }
       SetupDiDestroyDeviceInfoList(set);
       if (!ok) {
         BOOST_LOG(warning) << "Tablet posture: could not register the indicator device, error "sv << GetLastError();
         return false;
       }
+      // newdev.dll is loaded on demand: device creation happens once per machine, and this keeps the
+      // host free of a link-time dependency on it.
+      using update_driver_fn = BOOL(WINAPI *)(HWND, LPCWSTR, LPCWSTR, DWORD, PBOOL);
+      HMODULE newdev = LoadLibraryW(L"newdev.dll");
+      const auto update_driver = newdev ? reinterpret_cast<update_driver_fn>(reinterpret_cast<void *>(GetProcAddress(newdev, "UpdateDriverForPlugAndPlayDevicesW"))) : nullptr;
+      if (!update_driver) {
+        BOOST_LOG(warning) << "Tablet posture: newdev.dll is unavailable, error "sv << GetLastError();
+        if (newdev) {
+          FreeLibrary(newdev);
+        }
+        return false;
+      }
       BOOL reboot = FALSE;
-      if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, indicator_hardware_id, indicator_inf, INSTALLFLAG_FORCE, &reboot)) {
-        BOOST_LOG(warning) << "Tablet posture: could not bind the inbox laptop/slate driver, error "sv << GetLastError();
+      const BOOL bound = update_driver(nullptr, indicator_hardware_id, indicator_inf, install_flag_force, &reboot);
+      const DWORD bind_error = bound ? ERROR_SUCCESS : GetLastError();
+      FreeLibrary(newdev);
+      if (!bound) {
+        BOOST_LOG(warning) << "Tablet posture: could not bind the inbox laptop/slate driver, error "sv << bind_error;
         return false;
       }
       BOOST_LOG(info) << "Tablet posture: created the laptop/slate indicator device"sv;
@@ -139,10 +155,10 @@ namespace tablet_posture::backend {
       }
       DWORD written = 0;
       const BOOL ok = WriteFile(device, &value, 1, &written, nullptr);
-      const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+      const DWORD write_error = ok ? ERROR_SUCCESS : GetLastError();
       CloseHandle(device);
       if (!ok || written != 1) {
-        BOOST_LOG(warning) << "Tablet posture: indicator write failed, error "sv << error;
+        BOOST_LOG(warning) << "Tablet posture: indicator write failed, error "sv << write_error;
         return false;
       }
       return true;
