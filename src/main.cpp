@@ -31,7 +31,7 @@
 #include "nvhttp.h"
 #include "pairing_recovery.h"
 #include "process.h"
-#include "touch_ux.h"
+#include "tablet_posture.h"
 #include "pyrowave_host.h"
 #include "rtsp.h"
 #include "stream.h"
@@ -797,7 +797,8 @@ int main(int argc, char *argv[]) {
   // This allows access to the UI to fix configuration problems or view the logs.
 
   auto platf_deinit_guard = platf::init();
-  touch_ux::recover();
+  tablet_posture::recover();
+  auto tablet_posture_guard = util::fail_guard(tablet_posture::shutdown);
   if (!platf_deinit_guard) {
     BOOST_LOG(error) << "Platform failed to initialize"sv;
   }

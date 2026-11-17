@@ -162,7 +162,6 @@ foreach(_sunshine_versioned_tool IN ITEMS
         playnite-launcher
         sunshine_wgc_capture
         sunshine_end_stream_hotkey
-        sunshine_touch_ux
         sunshine_display_helper)
     if(TARGET "${_sunshine_versioned_tool}")
         sunshine_add_windows_versioninfo("${_sunshine_versioned_tool}")
@@ -186,7 +185,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.cpp"
-        "${CMAKE_SOURCE_DIR}/src/platform/windows/touch_ux.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/tablet_posture.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/host_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp"

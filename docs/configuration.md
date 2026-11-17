@@ -2472,17 +2472,18 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
-### touch_keyboard_assist
+### touch_tablet_mode
 
 <table>
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Windows only. Windows shows its touch keyboard for text fields only when the focus came from a physical touch
-            device, so touch that Vibepollo injects for a streaming client never brings it up. While a touch-primary client
-            streams (see <code>touch_posture_diagonal_mm</code>), the host watches keyboard focus: when a text field gets
-            focus right after touch input it shows the touch keyboard, and it hides the keyboard again when focus leaves text
-            fields. Nothing happens for other clients. See docs/touch-posture.md.
+            Windows only. Windows switches to tablet behaviour (touch keyboard for text fields, tablet taskbar) only when it
+            believes the machine is a convertible whose keyboard is detached or folded back. While a touch-primary client
+            streams (see <code>touch_posture_diagonal_mm</code>) the host reports exactly that to Windows through Windows' own
+            laptop/slate indicator; when no touch-primary client streams, or the client reports a laptop or desktop posture
+            (keyboard attached), the host reports a laptop. Clients change it live through the <code>/posture</code> endpoint.
+            See docs/touch-posture.md.
         </td>
     </tr>
     <tr>
@@ -2494,32 +2495,7 @@ These settings are host-wide and are not application runtime overrides.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            touch_keyboard_assist = disabled
-            @endcode</td>
-    </tr>
-</table>
-
-### touch_taskbar_autohide
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            Windows only. Auto-hide the taskbar while a touch-primary client streams, like the tablet posture of a handheld
-            or 2-in-1. The previous taskbar state is restored when the last touch session ends, and at the next host start if
-            the host stopped without restoring it. Nothing happens when the taskbar already auto-hides.
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            enabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            touch_taskbar_autohide = disabled
+            touch_tablet_mode = disabled
             @endcode</td>
     </tr>
 </table>

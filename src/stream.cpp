@@ -59,7 +59,7 @@ extern "C" {
 #include "platform/common.h"
 #include "posture_size.h"
 #include "process.h"
-#include "touch_ux.h"
+#include "tablet_posture.h"
 #include "pyrowave_policy.h"
 #include "pyrowave_bandwidth.h"
 #include "pyrowave_protocol.h"
@@ -648,7 +648,7 @@ namespace stream {
 
   struct session_t {
     bool touch_primary = false;  ///< The client posture selected the touch size policy (phone, tablet or handheld).
-    bool touch_ux_held = false;  ///< This session holds a touch_ux::acquire() reference.
+    bool tablet_posture_held = false;  ///< This session registered its client with tablet_posture.
     std::shared_ptr<void> display_power_guard;
     std::shared_ptr<void> audio_context_guard;
     std::shared_ptr<void> normal_display_capture;
@@ -4239,9 +4239,9 @@ namespace stream {
       session.display_power_guard.reset();
       BOOST_LOG(info) << "Session ended"sv;
 
-      if (session.touch_ux_held) {
-        session.touch_ux_held = false;
-        touch_ux::release();
+      if (session.tablet_posture_held) {
+        session.tablet_posture_held = false;
+        tablet_posture::client_stopped(session.device_uuid);
       }
 
       // Record session end in persistent history (fires exactly once, after join)
@@ -4368,10 +4368,9 @@ namespace stream {
         session_history::begin_session(meta);
       }
 
-      if (session.touch_primary && !session.touch_ux_held) {
-        BOOST_LOG(info) << "Touch-primary session: starting touch UX helper"sv;
-        touch_ux::acquire();
-        session.touch_ux_held = true;
+      if (!session.tablet_posture_held) {
+        tablet_posture::client_started(session.device_uuid, session.touch_primary);
+        session.tablet_posture_held = true;
       }
 
       // If this is the first session, invoke the platform callbacks

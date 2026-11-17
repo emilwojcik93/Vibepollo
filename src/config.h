@@ -260,8 +260,7 @@ namespace config {
     } dd;
 
     int touch_posture_diagonal_mm;  ///< Fixed physical diagonal (mm) the virtual display reports for touch-primary clients. Range 100-419, default 356 (14 in).
-    bool touch_keyboard_assist;  ///< Windows: show the touch keyboard when a text field gets focus after touch from a touch-primary client (injected touch does not trigger it by itself). Default on.
-    bool touch_taskbar_autohide;  ///< Windows: auto-hide the taskbar while a touch-primary client streams, restored at the end. Default on.
+    bool touch_tablet_mode;  ///< Windows: report the host as a tablet (slate) to Windows while a touch-primary client streams, and as a laptop otherwise. Default on.
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Idle-frame timing target in FPS. Default 20, range 0-1000; 0 uses the capture/encoder path fallback (see configuration docs).
     bool wgc_pacing_smoothing;  ///< Smooth WGC delivered frame cadence under low-latency (Reflex) source caps by snapping the pacing-group re-anchor back onto the prior grid instead of the jittery arrival phase. Disable for byte-for-byte legacy pacing.

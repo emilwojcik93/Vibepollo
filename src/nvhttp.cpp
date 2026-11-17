@@ -69,6 +69,7 @@
 #include "nvhttp_bitrate_policy.h"
 #include "nvhttp_dispatch.h"
 #include "posture_state.h"
+#include "tablet_posture.h"
 #include "remote_session.h"
 #include "remote_display_topology.h"
 #include "platform/common.h"
@@ -7352,9 +7353,11 @@ launch_session->exact_target_hold.reset();
         fail(429, "Too many posture updates; wait at least one second between calls");
         return;
       case update_status_e::unchanged:
+        tablet_posture::client_updated(verified_client->uuid, posture::effective_class(hints).has_value());
         BOOST_LOG(debug) << "Client ["sv << verified_client->name << "] posture update leaves the virtual display size at "sv << size_text(update.current);
         break;
       case update_status_e::changed:
+        tablet_posture::client_updated(verified_client->uuid, posture::effective_class(hints).has_value());
         BOOST_LOG(info) << "Client ["sv << verified_client->name << "] posture update changes the wanted virtual display size from "sv
                         << size_text(update.previous) << " to "sv << size_text(update.current)
                         << (update.boundary_crossed ? " (crosses the touch size boundary)"sv : ""sv)
