@@ -144,7 +144,7 @@ shell ignores injected touch for the keyboard, even on a handheld that has a rea
 screen. While a touch-primary session streams, the host therefore:
 
 - **Keyboard assist** (`touch_keyboard_assist`): watches UI Automation focus. A focused text
-  field within 2.5 s after injected touch shows the touch keyboard; when focus leaves
+  field within 5 s after injected touch shows the touch keyboard; when focus leaves
   text fields the keyboard is hidden again, but only if the host showed it.
 - **Taskbar auto-hide** (`touch_taskbar_autohide`): switches the taskbar to auto-hide and
   restores it when the last touch session ends. A journal file in the config folder

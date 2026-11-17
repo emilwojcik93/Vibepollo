@@ -13,7 +13,7 @@
 
 namespace touch_ux {
   /// How recent injected touch must be for a focus change to count as "caused by touch".
-  inline constexpr std::chrono::milliseconds touch_recent_window {2500};
+  inline constexpr std::chrono::milliseconds touch_recent_window {5000};
 
   /// Delay before the keyboard is hidden after focus left every text field; absorbs focus flicker.
   inline constexpr std::chrono::milliseconds hide_delay {350};
