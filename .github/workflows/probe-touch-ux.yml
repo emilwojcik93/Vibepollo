@@ -1,0 +1,23 @@
+name: probe-touch-ux
+on:
+  push:
+    branches: [probe/touch-ux]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: build
+        shell: msys2 {0}
+        run: |
+          g++ -std=gnu++23 -O1 -g -o probe-sta.exe probe/probe.cpp -lole32 -loleaut32 -luuid
+          ls -la probe-sta.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-exe
+          path: probe-sta.exe
