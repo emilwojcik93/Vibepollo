@@ -22,6 +22,7 @@
 #include <thread>
 
 // platform includes
+#include <winsock2.h>
 #include <windows.h>
 
 #include <objbase.h>
