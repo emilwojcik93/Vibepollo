@@ -42,7 +42,7 @@ using namespace std::literals;
 namespace tablet_posture::backend {
   bool apply(state_e state);
 
-  void recover();
+  void recover(bool resync);
 }  // namespace tablet_posture::backend
 
 namespace tablet_posture::backend {
@@ -294,15 +294,23 @@ namespace tablet_posture::backend {
     return ok;
   }
 
-  void recover() {
+  void recover(bool resync) {
     std::error_code ec;
-    if (!std::filesystem::exists(journal_path(), ec)) {
+    if (std::filesystem::exists(journal_path(), ec)) {
+      BOOST_LOG(warning) << "Tablet posture: restoring the state left by a previous host run"sv;
+      if (indicator_path()) {
+        write_indicator(laptop_byte);
+      }
+      undeclare();
       return;
     }
-    BOOST_LOG(warning) << "Tablet posture: restoring the state left by a previous host run"sv;
-    if (indicator_path()) {
-      write_indicator(laptop_byte);
+    // The inbox indicator driver starts in slate after every boot. Nothing declares the host a
+    // convertible at this point, so Windows is not in tablet posture, but the state should still
+    // read laptop until a touch client asks for slate.
+    if (resync && indicator_path() && read_control_value(L"ConvertibleSlateMode") == std::optional<DWORD> {slate_byte}) {
+      if (write_indicator(laptop_byte)) {
+        BOOST_LOG(info) << "Tablet posture: indicator reset to laptop at start"sv;
+      }
     }
-    undeclare();
   }
 }  // namespace tablet_posture::backend
