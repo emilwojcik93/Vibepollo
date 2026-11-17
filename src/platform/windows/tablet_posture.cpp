@@ -95,16 +95,16 @@ namespace tablet_posture::backend {
       if (set == INVALID_HANDLE_VALUE) {
         return false;
       }
-      SP_DEVINFO_DATA info {};
-      info.cbSize = sizeof(info);
-      bool ok = SetupDiCreateDeviceInfoW(set, L"HIDClass", &hid_class, L"Vibepollo laptop/slate indicator", nullptr, DICD_GENERATE_ID, &info);
+      SP_DEVINFO_DATA device_info {};
+      device_info.cbSize = sizeof(device_info);
+      bool ok = SetupDiCreateDeviceInfoW(set, L"HIDClass", &hid_class, L"Vibepollo laptop/slate indicator", nullptr, DICD_GENERATE_ID, &device_info);
       if (ok) {
         std::array<wchar_t, 16> ids {};
         wcscpy(ids.data(), indicator_hardware_id);  // double-NUL terminated multi-string
-        ok = SetupDiSetDeviceRegistryPropertyW(set, &info, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.data()), static_cast<DWORD>(ids.size() * sizeof(wchar_t)));
+        ok = SetupDiSetDeviceRegistryPropertyW(set, &device_info, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.data()), static_cast<DWORD>(ids.size() * sizeof(wchar_t)));
       }
       if (ok) {
-        ok = SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &info);
+        ok = SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &device_info);
       }
       SetupDiDestroyDeviceInfoList(set);
       if (!ok) {
@@ -139,10 +139,10 @@ namespace tablet_posture::backend {
       }
       DWORD written = 0;
       const BOOL ok = WriteFile(device, &value, 1, &written, nullptr);
-      const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+      const DWORD write_error = ok ? ERROR_SUCCESS : GetLastError();
       CloseHandle(device);
       if (!ok || written != 1) {
-        BOOST_LOG(warning) << "Tablet posture: indicator write failed, error "sv << error;
+        BOOST_LOG(warning) << "Tablet posture: indicator write failed, error "sv << write_error;
         return false;
       }
       return true;
