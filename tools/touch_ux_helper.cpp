@@ -62,6 +62,9 @@ namespace {
   std::atomic<long long> last_touch_ticks {0};
   std::atomic<bool> stop_requested {false};
   FILE *log_file = nullptr;
+  CONTROLTYPEID last_control_type = 0;  ///< Control type of the last focused element, for the log.
+  bool last_value_pattern_found = false;
+  bool last_value_read_only = false;
 
   void log_line(const char *text, long value = 0) {
     if (!log_file) {
@@ -114,6 +117,9 @@ namespace {
     if (FAILED(element->get_CurrentControlType(&type))) {
       return false;
     }
+    last_control_type = type;
+    last_value_pattern_found = false;
+    last_value_read_only = false;
     if (type != UIA_EditControlTypeId && type != UIA_DocumentControlTypeId) {
       return false;
     }
@@ -124,7 +130,9 @@ namespace {
     }
     if (value) {
       BOOL read_only = FALSE;
+      last_value_pattern_found = true;
       if (SUCCEEDED(value->get_CurrentIsReadOnly(&read_only))) {
+        last_value_read_only = read_only != FALSE;
         return !read_only;
       }
     }
@@ -178,6 +186,8 @@ int main(int argc, char **argv) {
   bool last_editable = false;
   bool first_poll = true;
   bool first_toggle = true;
+  long last_state_key = -1;
+  CONTROLTYPEID last_logged_type = -1;
   std::chrono::steady_clock::time_point hide_at {};
   bool hide_pending = false;
 
@@ -196,6 +206,14 @@ int main(int argc, char **argv) {
     }
     const bool editable = focused_element_is_editable(automation.Get());
     const bool visible = osk_visible();
+    const long state_key = (editable ? 1 : 0) | (visible ? 2 : 0) | (recent ? 4 : 0) | (we_showed ? 8 : 0);
+    if (state_key != last_state_key || last_control_type != last_logged_type) {
+      log_line("state editable|visible|recent|shown bits", state_key);
+      log_line("focused control type", last_control_type);
+      log_line("value pattern found/read-only", (last_value_pattern_found ? 1 : 0) | (last_value_read_only ? 2 : 0));
+      last_state_key = state_key;
+      last_logged_type = last_control_type;
+    }
     if (editable) {
       hide_pending = false;
       if (!visible && recent && !last_editable) {
