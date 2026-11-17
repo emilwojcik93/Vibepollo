@@ -44,14 +44,14 @@ int main(int argc, char **argv) {
     L("uia create", hr);
     if (SUCCEEDED(hr)) {
       ComPtr<IUIAutomationElement> e;
-      hr = a->GetFocusedElement(e.GetAddressOf());
+      hr = (argc > 3) ? a->ElementFromHandle(reinterpret_cast<UIA_HWND>(static_cast<intptr_t>(std::strtoll(argv[3], nullptr, 10))), e.GetAddressOf()) : a->GetFocusedElement(e.GetAddressOf());
       L("uia focused hr", hr);
       if (SUCCEEDED(hr) && e) {
         CONTROLTYPEID t = 0; hr = e->get_CurrentControlType(&t); L("controltype hr", hr); L("controltype", t);
         ComPtr<IUIAutomationValuePattern> v;
         hr = e->GetCurrentPatternAs(UIA_ValuePatternId, iid_value_pattern, reinterpret_cast<void **>(v.GetAddressOf()));
         L("valuepattern hr", hr);
-        if (SUCCEEDED(hr) && v) { BOOL ro = 0; hr = v->get_CurrentIsReadOnly(&ro); L("readonly hr", hr); L("readonly", ro); }
+        L("valuepattern ptr non-null", v ? 1 : 0); if (SUCCEEDED(hr) && v) { L("calling readonly"); BOOL ro = 0; hr = v->get_CurrentIsReadOnly(&ro); L("readonly hr", hr); L("readonly", ro); }
       }
     }
   }
