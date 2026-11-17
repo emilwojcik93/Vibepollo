@@ -13,7 +13,9 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tablet_posture {
   enum class state_e {
@@ -62,8 +64,37 @@ namespace tablet_posture {
       return clients_.size();
     }
 
+    /// State the clients ask for, ignoring any override.
+    state_e client_state() const {
+      return client_state_;
+    }
+
+    /// The state to apply: the override when set, else what the clients ask for.
     state_e state() const {
-      return state_;
+      return override_.value_or(client_state_);
+    }
+
+    /// Force a state regardless of the clients (simulates the keyboard being detached or attached). nullopt returns control to the clients.
+    void set_override(std::optional<state_e> forced) {
+      override_ = forced;
+    }
+
+    std::optional<state_e> override_state() const {
+      return override_;
+    }
+
+    struct client_info_t {
+      std::string id;
+      int sessions;
+      bool touch_primary;
+    };
+
+    std::vector<client_info_t> clients() const {
+      std::vector<client_info_t> out;
+      for (const auto &[id, entry] : clients_) {
+        out.push_back({id, entry.sessions, entry.touch_primary});
+      }
+      return out;
     }
 
   private:
@@ -73,19 +104,19 @@ namespace tablet_posture {
     };
 
     bool refresh() {
-      state_e wanted = state_e::laptop;
+      const auto before = state();
+      client_state_ = state_e::laptop;
       for (const auto &[client, entry] : clients_) {
         if (entry.touch_primary) {
-          wanted = state_e::slate;
+          client_state_ = state_e::slate;
           break;
         }
       }
-      const bool changed = wanted != state_;
-      state_ = wanted;
-      return changed;
+      return state() != before;
     }
 
     std::map<std::string, entry_t> clients_;
-    state_e state_ = state_e::laptop;
+    state_e client_state_ = state_e::laptop;
+    std::optional<state_e> override_;
   };
 }  // namespace tablet_posture
