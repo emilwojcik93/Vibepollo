@@ -4369,6 +4369,7 @@ namespace stream {
       }
 
       if (session.touch_primary && !session.touch_ux_held) {
+        BOOST_LOG(info) << "Touch-primary session: starting touch UX helper"sv;
         touch_ux::acquire();
         session.touch_ux_held = true;
       }
