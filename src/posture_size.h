@@ -107,16 +107,26 @@ namespace posture {
   std::optional<client_class_e> effective_class(const hints_t &hints);
 
   /**
+   * @brief True when the client has a touch screen at all, whatever its keyboard state.
+   *
+   * Capability, not state: a tablet, handheld or phone class, `clientTouch=1`, or the paired-client
+   * flag. A 2-in-1 that reports `laptop` with `clientTouch=1` is touch-capable. The virtual display
+   * size follows this, so attaching or detaching a keyboard never needs a different display;
+   * effective_class() is the state that decides the host's desktop or tablet mode.
+   */
+  bool touch_capable(const hints_t &hints);
+
+  /**
    * @brief Derive the virtual display physical size (contract v2).
    *
-   * One fixed diagonal for every touch-primary client: `diagonal_mm` when it is inside
+   * One fixed diagonal for every touch-capable client (see touch_capable()), in every keyboard state: `diagonal_mm` when it is inside
    * [100, 419], else the 356 mm default. The stream pixels only split that diagonal into
    * width and height assuming square pixels (16:9 when a dimension is not positive), so
    * the result is the same for any stream resolution and any client screen size or aspect.
    * Each side is at least 10 mm. For every input the diagonal as encoded in the EDID
    * (whole centimetres, see edid_size_cm) stays below the 17.0 in docking limit.
    *
-   * @return nullopt when no policy applies, so callers keep today's behaviour.
+   * @return nullopt when the client is not touch-capable, so callers keep the driver default size.
    */
   std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px, int diagonal_mm = default_touch_diagonal_mm);
 

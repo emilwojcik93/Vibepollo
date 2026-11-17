@@ -355,3 +355,35 @@ TEST(PostureSizeProperty, TheDefaultDiagonalEncodesBelowTheLimitForEveryResoluti
     EXPECT_LT(edid_diagonal_mm(*size), 17.0 * 25.4) << width << 'x' << height;
   }
 }
+
+TEST(PostureTouchCapability, TouchClassesAndFlagsAreCapable) {
+  EXPECT_TRUE(touch_capable(hints_for(client_class_e::phone)));
+  EXPECT_TRUE(touch_capable(hints_for(client_class_e::tablet)));
+  EXPECT_TRUE(touch_capable(hints_for(client_class_e::handheld)));
+  EXPECT_TRUE(touch_capable(parse_hints("", "1")));
+  EXPECT_TRUE(touch_capable(parse_hints("", "", true)));
+}
+
+TEST(PostureTouchCapability, KeyboardStateDoesNotRemoveCapability) {
+  // A 2-in-1 with its keyboard attached: laptop state, still a touch device.
+  EXPECT_TRUE(touch_capable(parse_hints("laptop", "1")));
+  EXPECT_TRUE(touch_capable(parse_hints("desktop", "1")));
+  EXPECT_TRUE(touch_capable(parse_hints("laptop", "", true)));
+  EXPECT_FALSE(effective_class(parse_hints("laptop", "1")));
+}
+
+TEST(PostureTouchCapability, NoTouchMeansNotCapable) {
+  EXPECT_FALSE(touch_capable(hints_for(client_class_e::laptop)));
+  EXPECT_FALSE(touch_capable(hints_for(client_class_e::desktop)));
+  EXPECT_FALSE(touch_capable(parse_hints("laptop", "0")));
+  EXPECT_FALSE(touch_capable(hints_t {}));
+}
+
+TEST(PosturePhysicalSize, SameSizeWithKeyboardAttachedAndDetached) {
+  const auto attached = derive_physical_size(parse_hints("laptop", "1"), 1920, 1280);
+  const auto detached = derive_physical_size(parse_hints("tablet", "1"), 1920, 1280);
+  ASSERT_TRUE(attached);
+  ASSERT_TRUE(detached);
+  EXPECT_EQ(*attached, *detached);
+  EXPECT_FALSE(derive_physical_size(parse_hints("laptop", "0"), 1920, 1280));
+}

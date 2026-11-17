@@ -200,3 +200,14 @@ TEST(PostureStatus, AppliedStateIsUnknownWithoutAnOwnedDisplay) {
   EXPECT_FALSE(status->applied_known);
   EXPECT_FALSE(status->client_class);
 }
+
+TEST(PostureRuntimeUpdate, KeyboardFlipOfATouchClientKeepsTheDisplay) {
+  const std::string client = "flip-client";
+  record_launch(client, parse_hints("laptop", "1"), 1920, 1280);
+  const auto detached = apply_runtime_update(client, parse_hints("tablet", "1"), t0);
+  EXPECT_FALSE(detached.boundary_crossed);
+  EXPECT_EQ(detached.status, status_e::unchanged);
+  const auto attached = apply_runtime_update(client, parse_hints("laptop", "1"), t0 + std::chrono::seconds {2});
+  EXPECT_FALSE(attached.boundary_crossed);
+  EXPECT_EQ(attached.status, status_e::unchanged);
+}

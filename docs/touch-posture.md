@@ -131,10 +131,15 @@ needs the "View stream" permission and an active session. Calls closer than one 
 | No active session for the client | `status_code="404"` |
 | Closer than one second to the previous call | `status_code="429"` |
 
-The running display is never recreated by this call, so a running stream is never
-disturbed. The host recomputes the wanted size and logs a change; it applies at the
-next launch or resume, which recreates the display when the change crosses the touch
-boundary.
+The response also carries `display_change`: `1` when the new state needs a different virtual display
+(the client became or stopped being touch-capable), else `0`. A client should restart its stream only
+on `1`; clients that ignore the attribute keep working.
+
+The display size follows touch *capability* (a tablet, handheld or phone class, `clientTouch=1`, or the
+paired-client flag), not the keyboard state. A 2-in-1 that launches as `laptop` with `clientTouch=1` already
+has the touch-sized display, so attaching, detaching or flipping its keyboard only switches the host between
+desktop and tablet mode: no display replacement and no stream restart. The running display is never recreated
+by this call; a change that does need one applies at the next launch or resume.
 
 ## Tablet mode (Windows)
 

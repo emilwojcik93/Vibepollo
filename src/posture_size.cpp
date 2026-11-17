@@ -109,8 +109,12 @@ namespace posture {
     return std::nullopt;
   }
 
+  bool touch_capable(const hints_t &hints) {
+    return effective_class(hints).has_value() || (hints.touch && *hints.touch) || hints.paired_touch;
+  }
+
   std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px, int diagonal_mm) {
-    if (!effective_class(hints)) {
+    if (!touch_capable(hints)) {
       return std::nullopt;
     }
 

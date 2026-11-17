@@ -7447,6 +7447,11 @@ namespace VDISPLAY_SUNSHINE {
                 allow_driver_recovery = false;
                 retry_owned_replacement = true;
               }
+              if (posture_recreate) {
+                // The old display is gone on purpose. Without this the outer loop gives up after this
+                // first attempt and the session falls back to a physical display with another aspect.
+                retry_owned_replacement = true;
+              }
               // Removal may reopen the transport. Return to the outer bounded
               // retry so adapter selection is applied again immediately before
               // the replacement create on the final transport.

@@ -3447,7 +3447,10 @@ namespace nvhttp {
       const int touch_diagonal_mm = posture::sanitize_touch_diagonal_mm(config::video.touch_posture_diagonal_mm);
       posture::record_launch(launch_session->client_uuid, launch_session->client_posture, launch_session->width, launch_session->height, touch_diagonal_mm);
       if (const auto session_size = posture::derive_physical_size(launch_session->client_posture, launch_session->width, launch_session->height, touch_diagonal_mm)) {
-        BOOST_LOG(info) << "Client posture class "sv << posture::to_string(*posture::effective_class(launch_session->client_posture))
+        const auto state_class = posture::effective_class(launch_session->client_posture);
+        const auto reported_class = state_class ? state_class : launch_session->client_posture.posture;
+        BOOST_LOG(info) << "Client posture class "sv << (reported_class ? posture::to_string(*reported_class) : "touch"sv)
+                        << (state_class ? " (tablet mode)"sv : " (keyboard attached, desktop mode)"sv)
                         << ": virtual display physical size "sv << session_size->width_mm << 'x' << session_size->height_mm
                         << " mm, diagonal "sv << posture::size_diagonal_mm(*session_size) << " mm (host touch_posture_diagonal_mm "sv << touch_diagonal_mm << ")"sv;
       }
@@ -7364,6 +7367,9 @@ launch_session->exact_target_hold.reset();
                         << ". The running display is not recreated; the change applies at the next launch or resume."sv;
         break;
     }
+    // Tells the client whether the new state needs a different virtual display, i.e. whether a
+    // stream restart is worth it. The host mode (desktop or tablet) has already been switched live.
+    tree.put("root.<xmlattr>.display_change", update.boundary_crossed ? 1 : 0);
     tree.put("root.<xmlattr>.status_code", 200);
   }
 

@@ -19,8 +19,8 @@ namespace tablet_posture {
     /// Switch the host to `state`. Returns false when the platform could not do it. Implemented per platform.
     bool apply(state_e state);
 
-    /// Undo a previous host process' leftovers. Implemented per platform.
-    void recover();
+    /// Undo a previous host process' leftovers; with `resync` also put a freshly booted indicator back to laptop. Implemented per platform.
+    void recover(bool resync);
   }  // namespace backend
 
 #ifndef _WIN32
@@ -29,7 +29,7 @@ namespace tablet_posture {
       return true;
     }
 
-    void recover() {}
+    void recover(bool) {}
   }  // namespace backend
 #endif
 
@@ -139,7 +139,7 @@ namespace tablet_posture {
 
   void recover() {
     std::lock_guard lock {mutex};
-    backend::recover();
+    backend::recover(config::video.touch_tablet_mode);
   }
 
   void shutdown() {
