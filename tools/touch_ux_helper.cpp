@@ -109,11 +109,7 @@ namespace {
     tip->Toggle(GetDesktopWindow());
   }
 
-  bool focused_element_is_editable(IUIAutomation *automation) {
-    ComPtr<IUIAutomationElement> element;
-    if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
-      return false;
-    }
+  bool element_is_editable(IUIAutomationElement *element) {
     CONTROLTYPEID type = 0;
     if (FAILED(element->get_CurrentControlType(&type))) {
       return false;
