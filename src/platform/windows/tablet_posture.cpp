@@ -30,7 +30,6 @@
 #include <winsock2.h>
 #include <windows.h>
 
-#include <newdev.h>
 #include <setupapi.h>
 
 // local includes
@@ -58,6 +57,8 @@ namespace tablet_posture::backend {
     constexpr auto priority_control = L"SYSTEM\\CurrentControlSet\\Control\\PriorityControl";
     constexpr auto convertibility_value = L"ConvertibilityEnabled";
     constexpr auto ignore_display_value = L"CSMIgnoreDisplayConfig";
+
+    constexpr DWORD install_flag_force = 0x00000001;  // INSTALLFLAG_FORCE
 
     constexpr unsigned char laptop_byte = 1;
     constexpr unsigned char slate_byte = 0;
@@ -111,9 +112,24 @@ namespace tablet_posture::backend {
         BOOST_LOG(warning) << "Tablet posture: could not register the indicator device, error "sv << GetLastError();
         return false;
       }
+      // newdev.dll is loaded on demand: device creation happens once per machine, and this keeps the
+      // host free of a link-time dependency on it.
+      using update_driver_fn = BOOL(WINAPI *)(HWND, LPCWSTR, LPCWSTR, DWORD, PBOOL);
+      HMODULE newdev = LoadLibraryW(L"newdev.dll");
+      const auto update_driver = newdev ? reinterpret_cast<update_driver_fn>(reinterpret_cast<void *>(GetProcAddress(newdev, "UpdateDriverForPlugAndPlayDevicesW"))) : nullptr;
+      if (!update_driver) {
+        BOOST_LOG(warning) << "Tablet posture: newdev.dll is unavailable, error "sv << GetLastError();
+        if (newdev) {
+          FreeLibrary(newdev);
+        }
+        return false;
+      }
       BOOL reboot = FALSE;
-      if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, indicator_hardware_id, indicator_inf, INSTALLFLAG_FORCE, &reboot)) {
-        BOOST_LOG(warning) << "Tablet posture: could not bind the inbox laptop/slate driver, error "sv << GetLastError();
+      const BOOL bound = update_driver(nullptr, indicator_hardware_id, indicator_inf, install_flag_force, &reboot);
+      const DWORD bind_error = bound ? ERROR_SUCCESS : GetLastError();
+      FreeLibrary(newdev);
+      if (!bound) {
+        BOOST_LOG(warning) << "Tablet posture: could not bind the inbox laptop/slate driver, error "sv << bind_error;
         return false;
       }
       BOOST_LOG(info) << "Tablet posture: created the laptop/slate indicator device"sv;
