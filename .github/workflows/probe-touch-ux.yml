@@ -15,9 +15,12 @@ jobs:
       - name: build
         shell: msys2 {0}
         run: |
-          g++ -std=gnu++23 -O1 -g -static -o probe-sta.exe probe/probe.cpp -lole32 -loleaut32 -luuid
-          ls -la probe-sta.exe
+          g++ --version | head -n1
+          for o in O0 O1 O2 O3; do
+            g++ -std=gnu++23 -$o -DNDEBUG -Wall -Werror -D_WIN32_WINNT=0x0A00 -static -o helper-$o.exe tools/touch_ux_helper.cpp -lole32 -loleaut32 -luuid -luser32
+          done
+          ls -la helper-*.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: probe-exe
-          path: probe-sta.exe
+          name: helper-exes
+          path: helper-*.exe
