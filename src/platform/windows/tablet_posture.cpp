@@ -120,19 +120,19 @@ namespace tablet_posture::backend {
       return true;
     }
 
-    bool write_indicator(unsigned char value) {
-      auto path = indicator_path();
-      if (!path && create_indicator()) {
-        for (int attempt = 0; attempt < 20 && !path; ++attempt) {
-          Sleep(250);
-          path = indicator_path();
-        }
+    /// Value of a PriorityControl DWORD, or nullopt when absent.
+    std::optional<DWORD> read_control_value(const wchar_t *name) {
+      DWORD data = 0;
+      DWORD size = sizeof(data);
+      if (RegGetValueW(HKEY_LOCAL_MACHINE, priority_control, name, RRF_RT_REG_DWORD, nullptr, &data, &size) != ERROR_SUCCESS) {
+        return std::nullopt;
       }
-      if (!path) {
-        BOOST_LOG(warning) << "Tablet posture: no laptop/slate indicator device available"sv;
-        return false;
-      }
-      HANDLE device = CreateFileW(path->c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+      return data;
+    }
+
+    /// One write of the state byte to the indicator interface.
+    bool write_indicator_once(const std::wstring &path, unsigned char value) {
+      HANDLE device = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
       if (device == INVALID_HANDLE_VALUE) {
         BOOST_LOG(warning) << "Tablet posture: could not open the indicator, error "sv << GetLastError();
         return false;
@@ -148,14 +148,38 @@ namespace tablet_posture::backend {
       return true;
     }
 
-    /// Value of a PriorityControl DWORD, or nullopt when absent.
-    std::optional<DWORD> read_control_value(const wchar_t *name) {
-      DWORD data = 0;
-      DWORD size = sizeof(data);
-      if (RegGetValueW(HKEY_LOCAL_MACHINE, priority_control, name, RRF_RT_REG_DWORD, nullptr, &data, &size) != ERROR_SUCCESS) {
-        return std::nullopt;
+    /// True once the kernel reports the written state in ConvertibleSlateMode (it mirrors the byte: 1 laptop, 0 slate).
+    bool wait_for_state(unsigned char value) {
+      for (int attempt = 0; attempt < 20; ++attempt) {
+        if (read_control_value(L"ConvertibleSlateMode") == std::optional<DWORD> {value}) {
+          return true;
+        }
+        Sleep(100);
       }
-      return data;
+      return false;
+    }
+
+    bool write_indicator(unsigned char value) {
+      auto path = indicator_path();
+      if (!path && create_indicator()) {
+        for (int attempt = 0; attempt < 20 && !path; ++attempt) {
+          Sleep(250);
+          path = indicator_path();
+        }
+        Sleep(1000);  // let the new device finish starting before its first write
+      }
+      if (!path) {
+        BOOST_LOG(warning) << "Tablet posture: no laptop/slate indicator device available"sv;
+        return false;
+      }
+      for (int attempt = 0; attempt < 3; ++attempt) {
+        if (write_indicator_once(*path, value) && wait_for_state(value)) {
+          return true;
+        }
+        Sleep(500);
+      }
+      BOOST_LOG(warning) << "Tablet posture: Windows did not report the requested laptop/slate state"sv;
+      return false;
     }
 
     bool write_control_value(const wchar_t *name, std::optional<DWORD> value) {
