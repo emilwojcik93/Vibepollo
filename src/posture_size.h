@@ -116,6 +116,55 @@ namespace posture {
    */
   bool touch_capable(const hints_t &hints);
 
+  /// Per-client host mode override. `automatic` follows the client's own hints.
+  enum class client_override_e {
+    automatic,
+    desktop,
+    tablet,
+    handheld,
+  };
+
+  /// Parse an override word: `auto`, `desktop`, `tablet` or `handheld`. Anything else yields nullopt.
+  std::optional<client_override_e> parse_client_override(std::string_view value);
+
+  /// Wire word of an override: `auto`, `desktop`, `tablet` or `handheld`.
+  std::string_view to_string(client_override_e value);
+
+  /**
+   * @brief Apply a per-client override to the hints.
+   *
+   * automatic: unchanged. tablet: posture tablet, touch true. handheld: posture handheld, touch true.
+   * desktop: posture laptop when the client is touch-capable (touch flags stay, so the touch-sized
+   * display is kept), else desktop.
+   */
+  hints_t apply_client_override(hints_t hints, client_override_e value);
+
+  /// What the host does for a client.
+  enum class host_mode_e {
+    desktop,
+    tablet,
+    handheld,
+  };
+
+  /// Host option `handheld_mode`: what a handheld client gets.
+  enum class handheld_policy_e {
+    tablet,
+    xbox_fullscreen,
+    desktop,
+  };
+
+  /// Parse the host option `handheld_mode`: `tablet`, `xbox_fullscreen` or `desktop`. Anything else yields nullopt.
+  std::optional<handheld_policy_e> parse_handheld_policy(std::string_view value);
+
+  std::string_view to_string(host_mode_e mode);
+  std::string_view to_string(handheld_policy_e policy);
+
+  /**
+   * @brief Host mode for these hints: no effective class is desktop, a handheld class follows
+   * `policy` (xbox_fullscreen is handheld), any other touch class is tablet.
+   */
+  host_mode_e host_mode(const hints_t &hints, handheld_policy_e policy);
+
   /**
    * @brief Derive the virtual display physical size (contract v2).
    *

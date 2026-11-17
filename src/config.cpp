@@ -980,6 +980,7 @@ namespace config {
 
     356,  // touch_posture_diagonal_mm (14 in; range 100-419)
     true,  // touch_tablet_mode
+    "tablet",  // handheld_mode (tablet | xbox_fullscreen | desktop)
     0,  // max_bitrate
     20,  // minimum_fps_target (FPS; 0 uses the capture/encoder path fallback)
     true,  // wgc_pacing_smoothing
@@ -2076,6 +2077,23 @@ namespace config {
       }
     }
     bool_f(vars, "touch_tablet_mode", video.touch_tablet_mode);
+    {
+      std::string handheld_mode;
+      string_f(vars, "handheld_mode", handheld_mode);
+      handheld_mode = boost::algorithm::trim_copy(handheld_mode);
+      if (handheld_mode.size() >= 2 && handheld_mode.front() == '"' && handheld_mode.back() == '"') {
+        handheld_mode = handheld_mode.substr(1, handheld_mode.size() - 2);
+      }
+      if (!handheld_mode.empty()) {
+        if (posture::parse_handheld_policy(handheld_mode)) {
+          video.handheld_mode = handheld_mode;
+        } else {
+          video.handheld_mode = "tablet";
+          BOOST_LOG(warning) << "config: handheld_mode must be tablet, xbox_fullscreen or desktop, got ["sv << handheld_mode
+                             << "]; using the default tablet"sv;
+        }
+      }
+    }
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 

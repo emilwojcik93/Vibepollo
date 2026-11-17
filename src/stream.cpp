@@ -647,7 +647,7 @@ namespace stream {
   };
 
   struct session_t {
-    bool touch_primary = false;  ///< The client posture selected the touch size policy (phone, tablet or handheld).
+    tablet_posture::client_mode_e client_mode = tablet_posture::client_mode_e::desktop;  ///< Host mode the client posture selected (desktop, tablet or handheld).
     bool tablet_posture_held = false;  ///< This session registered its client with tablet_posture.
     std::shared_ptr<void> display_power_guard;
     std::shared_ptr<void> audio_context_guard;
@@ -4369,7 +4369,7 @@ namespace stream {
       }
 
       if (!session.tablet_posture_held) {
-        tablet_posture::client_started(session.device_uuid, session.touch_primary);
+        tablet_posture::client_started(session.device_uuid, session.client_mode);
         session.tablet_posture_held = true;
       }
 
@@ -4555,7 +4555,7 @@ namespace stream {
       // a distinct row in the session_history database.
       session->history_uuid = uuid_util::uuid_t::generate().string();
       session->permission = launch_session.perm;
-      session->touch_primary = posture::effective_class(launch_session.client_posture).has_value();
+      session->client_mode = tablet_posture::to_client_mode(tablet_posture::host_mode_for(launch_session.client_posture));
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);

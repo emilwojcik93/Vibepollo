@@ -2500,6 +2500,42 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### handheld_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Windows only. What a client that reports the <code>handheld</code> class gets while it streams.
+            <code>tablet</code> reports the host as a tablet (see <code>touch_tablet_mode</code>).
+            <code>xbox_fullscreen</code> additionally asks Windows for the Xbox full screen experience; it must be enabled
+            on the host, otherwise the handheld client gets tablet mode. <code>desktop</code> treats handheld clients like
+            keyboard-attached desktops. A client can override this with its own host mode in the web UI.
+            Has no effect when <code>touch_tablet_mode</code> is disabled. See docs/touch-posture.md.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            tablet
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Choices</td>
+        <td colspan="2">@code{}
+            tablet
+            xbox_fullscreen
+            desktop
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            handheld_mode = xbox_fullscreen
+            @endcode</td>
+    </tr>
+</table>
+
 ### minimum_fps_target
 
 <table>

@@ -338,6 +338,14 @@ namespace nvhttp {
   bool set_client_touch_device(const std::string &uuid, bool touch_device);
 
   /**
+   * @brief Persist the per-client host mode override.
+   *
+   * `auto` follows the client's own posture hints; `desktop`, `tablet` and `handheld` force that host mode.
+   * @return True if the client was found and updated; false for an unknown mode word or an unknown client.
+   */
+  bool set_client_posture_mode(const std::string &uuid, const std::string &mode);
+
+  /**
    * @brief Remove all paired clients.
    * @return True only when the cleared machine pairing state was persisted.
    * @examples

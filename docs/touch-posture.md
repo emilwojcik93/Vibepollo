@@ -174,6 +174,34 @@ Who drives it:
 Needs the host service to run with administrator rights and the virtual display to be the only active
 display (a display positioned away from the origin keeps Windows out of tablet posture).
 
+## Host modes and options
+
+The host has three modes per client:
+
+| Mode | Windows |
+|---|---|
+| desktop | Laptop indicator: normal desktop behaviour. |
+| tablet | Slate indicator: tablet posture. |
+| handheld | Slate indicator, plus the Xbox full screen experience ("gaming posture"). |
+
+Which mode a client gets, from its state (`effective_class`):
+
+| Client | Mode |
+|---|---|
+| `desktop` or `laptop` posture (keyboard attached), or no posture and no touch | desktop |
+| `tablet`, `phone`, `clientTouch=1`, or a paired touch device | tablet |
+| `handheld` | set by `handheld_mode` (below) |
+
+- `handheld_mode` (host option): `tablet` (default) treats handheld clients like tablets, `xbox_fullscreen` makes them
+  handheld, `desktop` treats them like keyboard-attached desktops. The Xbox full screen experience must be enabled
+  on the host for `xbox_fullscreen`; otherwise the handheld client gets tablet mode.
+- `posture_mode` (per paired client, set in the web UI as "Host mode for this device" or through
+  `POST /api/clients/update`): `auto` (default) follows the client's own posture; `desktop`, `tablet` and
+  `handheld` force that mode for the client. The override applies at launch/resume and to `/posture` updates.
+  A forced `desktop` on a touch-capable client keeps its touch-sized virtual display.
+- With several clients the strongest mode wins: handheld, then tablet, then desktop.
+- `touch_tablet_mode = disabled` turns all of this off: the host never reports a slate or the gaming posture.
+
 ## Status
 
 `GET /api/clients/list` adds a `posture` object to every client that is streaming:

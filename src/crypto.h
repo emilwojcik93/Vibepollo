@@ -121,6 +121,7 @@ namespace crypto {
     bool allow_sleep = false; // Separate administrator opt-in, never inferred from PERM.
     // Host-side hint for clients that cannot send a posture: report the fixed touch diagonal for the virtual display.
     bool touch_device = false;
+    std::string posture_mode = "auto"; // Host mode for this client: auto, desktop, tablet, handheld.
     std::optional<std::int64_t> last_seen;
     std::unordered_map<std::string, std::string> config_overrides;
   };

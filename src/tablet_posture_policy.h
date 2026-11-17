@@ -23,24 +23,31 @@ namespace tablet_posture {
     slate,  ///< Keyboard detached or folded back: Windows tablet behaviour.
   };
 
-  /// Active clients and whether each one is touch-primary. A client may hold several sessions.
+  /// What a client asks of the host. Tablet and handheld both mean slate; handheld also asks for the gaming posture.
+  enum class client_mode_e {
+    desktop,
+    tablet,
+    handheld,
+  };
+
+  /// Active clients and the mode each one asks for. A client may hold several sessions.
   class registry_t {
   public:
     /// A session of `client` started. Returns true when the host state changed.
-    bool start(const std::string &client, bool touch_primary) {
+    bool start(const std::string &client, client_mode_e mode) {
       auto &entry = clients_[client];
       ++entry.sessions;
-      entry.touch_primary = touch_primary;
+      entry.mode = mode;
       return refresh();
     }
 
     /// The client's posture changed while it streams. Unknown clients are ignored. Returns true when the host state changed.
-    bool update(const std::string &client, bool touch_primary) {
+    bool update(const std::string &client, client_mode_e mode) {
       const auto it = clients_.find(client);
       if (it == clients_.end()) {
         return false;
       }
-      it->second.touch_primary = touch_primary;
+      it->second.mode = mode;
       return refresh();
     }
 
@@ -66,33 +73,48 @@ namespace tablet_posture {
 
     /// State the clients ask for, ignoring any override.
     state_e client_state() const {
-      return client_state_;
+      return client_mode_ == client_mode_e::desktop ? state_e::laptop : state_e::slate;
     }
 
-    /// The state to apply: the override when set, else what the clients ask for.
+    /// Mode the clients ask for (the strongest one: handheld, then tablet, then desktop), ignoring any override.
+    client_mode_e client_mode() const {
+      return client_mode_;
+    }
+
+    /// The mode to apply: the override when set, else what the clients ask for.
+    client_mode_e mode() const {
+      return override_.value_or(client_mode_);
+    }
+
+    /// The state to apply: slate unless the mode is desktop.
     state_e state() const {
-      return override_.value_or(client_state_);
+      return mode() == client_mode_e::desktop ? state_e::laptop : state_e::slate;
     }
 
-    /// Force a state regardless of the clients (simulates the keyboard being detached or attached). nullopt returns control to the clients.
-    void set_override(std::optional<state_e> forced) {
+    /// True when the gaming posture (Xbox full screen experience) is wanted.
+    bool gaming() const {
+      return mode() == client_mode_e::handheld;
+    }
+
+    /// Force a mode regardless of the clients (simulates the keyboard being detached or attached). nullopt returns control to the clients.
+    void set_override(std::optional<client_mode_e> forced) {
       override_ = forced;
     }
 
-    std::optional<state_e> override_state() const {
+    std::optional<client_mode_e> override_mode() const {
       return override_;
     }
 
     struct client_info_t {
       std::string id;
       int sessions;
-      bool touch_primary;
+      client_mode_e mode;
     };
 
     std::vector<client_info_t> clients() const {
       std::vector<client_info_t> out;
       for (const auto &[id, entry] : clients_) {
-        out.push_back({id, entry.sessions, entry.touch_primary});
+        out.push_back({id, entry.sessions, entry.mode});
       }
       return out;
     }
@@ -100,23 +122,22 @@ namespace tablet_posture {
   private:
     struct entry_t {
       int sessions = 0;
-      bool touch_primary = false;
+      client_mode_e mode = client_mode_e::desktop;
     };
 
     bool refresh() {
-      const auto before = state();
-      client_state_ = state_e::laptop;
+      const auto before_mode = mode();
+      client_mode_ = client_mode_e::desktop;
       for (const auto &[client, entry] : clients_) {
-        if (entry.touch_primary) {
-          client_state_ = state_e::slate;
-          break;
+        if (entry.mode > client_mode_) {
+          client_mode_ = entry.mode;
         }
       }
-      return state() != before;
+      return mode() != before_mode;
     }
 
     std::map<std::string, entry_t> clients_;
-    state_e client_state_ = state_e::laptop;
-    std::optional<state_e> override_;
+    client_mode_e client_mode_ = client_mode_e::desktop;
+    std::optional<client_mode_e> override_;
   };
 }  // namespace tablet_posture

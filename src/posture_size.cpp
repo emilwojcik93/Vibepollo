@@ -113,6 +113,99 @@ namespace posture {
     return effective_class(hints).has_value() || (hints.touch && *hints.touch) || hints.paired_touch;
   }
 
+  std::optional<client_override_e> parse_client_override(std::string_view value) {
+    for (const auto candidate : {client_override_e::automatic, client_override_e::desktop, client_override_e::tablet, client_override_e::handheld}) {
+      if (value == to_string(candidate)) {
+        return candidate;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(client_override_e value) {
+    switch (value) {
+      case client_override_e::automatic:
+        return "auto";
+      case client_override_e::desktop:
+        return "desktop";
+      case client_override_e::tablet:
+        return "tablet";
+      case client_override_e::handheld:
+        return "handheld";
+    }
+    return "auto";
+  }
+
+  hints_t apply_client_override(hints_t hints, client_override_e value) {
+    switch (value) {
+      case client_override_e::automatic:
+        break;
+      case client_override_e::tablet:
+        hints.posture = client_class_e::tablet;
+        hints.touch = true;
+        break;
+      case client_override_e::handheld:
+        hints.posture = client_class_e::handheld;
+        hints.touch = true;
+        break;
+      case client_override_e::desktop:
+        hints.posture = touch_capable(hints) ? client_class_e::laptop : client_class_e::desktop;
+        break;
+    }
+    return hints;
+  }
+
+  std::optional<handheld_policy_e> parse_handheld_policy(std::string_view value) {
+    for (const auto candidate : {handheld_policy_e::tablet, handheld_policy_e::xbox_fullscreen, handheld_policy_e::desktop}) {
+      if (value == to_string(candidate)) {
+        return candidate;
+      }
+    }
+    return std::nullopt;
+  }
+
+  std::string_view to_string(host_mode_e mode) {
+    switch (mode) {
+      case host_mode_e::desktop:
+        return "desktop";
+      case host_mode_e::tablet:
+        return "tablet";
+      case host_mode_e::handheld:
+        return "handheld";
+    }
+    return "desktop";
+  }
+
+  std::string_view to_string(handheld_policy_e policy) {
+    switch (policy) {
+      case handheld_policy_e::tablet:
+        return "tablet";
+      case handheld_policy_e::xbox_fullscreen:
+        return "xbox_fullscreen";
+      case handheld_policy_e::desktop:
+        return "desktop";
+    }
+    return "tablet";
+  }
+
+  host_mode_e host_mode(const hints_t &hints, handheld_policy_e policy) {
+    const auto client_class = effective_class(hints);
+    if (!client_class) {
+      return host_mode_e::desktop;
+    }
+    if (*client_class == client_class_e::handheld) {
+      switch (policy) {
+        case handheld_policy_e::xbox_fullscreen:
+          return host_mode_e::handheld;
+        case handheld_policy_e::desktop:
+          return host_mode_e::desktop;
+        case handheld_policy_e::tablet:
+          break;
+      }
+    }
+    return host_mode_e::tablet;
+  }
+
   std::optional<physical_size_t> derive_physical_size(const hints_t &hints, int width_px, int height_px, int diagonal_mm) {
     if (!touch_capable(hints)) {
       return std::nullopt;

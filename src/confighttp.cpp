@@ -2777,22 +2777,35 @@ namespace confighttp {
     const auto name = [](tablet_posture::state_e state) {
       return state == tablet_posture::state_e::slate ? "slate" : "laptop";
     };
+    const auto mode_name = [](tablet_posture::client_mode_e mode) {
+      switch (mode) {
+        case tablet_posture::client_mode_e::tablet:
+          return "tablet";
+        case tablet_posture::client_mode_e::handheld:
+          return "handheld";
+        case tablet_posture::client_mode_e::desktop:
+          break;
+      }
+      return "desktop";
+    };
     const auto status = tablet_posture::status();
     nlohmann::json output_tree;
     output_tree["enabled"] = status.enabled;
     output_tree["applied"] = name(status.applied);
     output_tree["wanted"] = name(status.wanted);
+    output_tree["mode"] = mode_name(status.wanted_mode);
+    output_tree["gaming"] = status.gaming_applied;
     output_tree["override"] = status.override_state ? nlohmann::json(name(*status.override_state)) : nlohmann::json(nullptr);
     output_tree["clients"] = nlohmann::json::array();
     for (const auto &client : status.clients) {
-      output_tree["clients"].push_back({{"id", client.id}, {"sessions", client.sessions}, {"touch_primary", client.touch_primary}});
+      output_tree["clients"].push_back({{"id", client.id}, {"sessions", client.sessions}, {"touch_primary", client.mode != tablet_posture::client_mode_e::desktop}, {"mode", mode_name(client.mode)}});
     }
     output_tree["status"] = true;
     send_response(response, output_tree, "no-store");
   }
 
   /**
-   * @brief Simulate the keyboard being detached (`slate`) or attached (`laptop`), or give control back to the clients (`auto`).
+   * @brief Simulate the keyboard being detached (`slate` or `tablet`) or attached (`laptop`), force the handheld mode (`handheld`), or give control back to the clients (`auto`).
    *
    * @api_examples{/api/tablet-posture| POST| {"mode": "slate"}}
    */
@@ -2808,18 +2821,20 @@ namespace confighttp {
       ss << request->content.rdbuf();
       const auto input_tree = nlohmann::json::parse(ss.str());
       if (!input_tree.contains("mode") || !input_tree["mode"].is_string()) {
-        bad_request(response, request, "mode must be \"slate\", \"laptop\" or \"auto\"");
+        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
         return;
       }
       const auto mode = input_tree["mode"].get<std::string>();
       if (mode == "slate") {
-        tablet_posture::set_override(tablet_posture::state_e::slate);
+        tablet_posture::set_override(tablet_posture::client_mode_e::tablet);
       } else if (mode == "laptop") {
-        tablet_posture::set_override(tablet_posture::state_e::laptop);
+        tablet_posture::set_override(tablet_posture::client_mode_e::desktop);
+      } else if (mode == "handheld") {
+        tablet_posture::set_override(tablet_posture::client_mode_e::handheld);
       } else if (mode == "auto") {
         tablet_posture::set_override(std::nullopt);
       } else {
-        bad_request(response, request, "mode must be \"slate\", \"laptop\" or \"auto\"");
+        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
         return;
       }
       nlohmann::json output_tree;
@@ -3125,12 +3140,21 @@ namespace confighttp {
         bad_request(response, request, "touch_device must be a boolean");
         return;
       }
-      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled") || input_tree.contains("touch_device"))) {
+      if (input_tree.contains("posture_mode") &&
+          (!input_tree["posture_mode"].is_string() || !posture::parse_client_override(input_tree["posture_mode"].get<std::string>()))) {
+        bad_request(response, request, "posture_mode must be one of auto, desktop, tablet, handheld");
+        return;
+      }
+      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled") || input_tree.contains("touch_device") || input_tree.contains("posture_mode"))) {
         bool updated = true;
         if (hdr_profile.has_value()) updated = nvhttp::set_client_hdr_profile(uuid, *hdr_profile);
         if (input_tree.contains("touch_device")) {
           output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
           updated = output_tree["touch_device_updated"].get<bool>() && updated;
+        }
+        if (input_tree.contains("posture_mode")) {
+          output_tree["posture_mode_updated"] = nvhttp::set_client_posture_mode(uuid, input_tree["posture_mode"].get<std::string>());
+          updated = output_tree["posture_mode_updated"].get<bool>() && updated;
         }
         if (input_tree.contains("allow_sleep")) {
           output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
@@ -3225,6 +3249,10 @@ namespace confighttp {
       if (input_tree.contains("touch_device")) {
         output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
         updated = output_tree["touch_device_updated"].get<bool>() && updated;
+      }
+      if (input_tree.contains("posture_mode")) {
+        output_tree["posture_mode_updated"] = nvhttp::set_client_posture_mode(uuid, input_tree["posture_mode"].get<std::string>());
+        updated = output_tree["posture_mode_updated"].get<bool>() && updated;
       }
       if (input_tree.contains("enabled")) {
         output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree["enabled"].get<bool>());

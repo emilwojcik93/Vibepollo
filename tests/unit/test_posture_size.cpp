@@ -387,3 +387,74 @@ TEST(PosturePhysicalSize, SameSizeWithKeyboardAttachedAndDetached) {
   EXPECT_EQ(*attached, *detached);
   EXPECT_FALSE(derive_physical_size(parse_hints("laptop", "0"), 1920, 1280));
 }
+
+TEST(PostureClientOverride, ParseAndToStringRoundTrip) {
+  for (const auto value : {client_override_e::automatic, client_override_e::desktop, client_override_e::tablet, client_override_e::handheld}) {
+    EXPECT_EQ(parse_client_override(to_string(value)), value);
+  }
+  EXPECT_EQ(to_string(client_override_e::automatic), "auto");
+  EXPECT_EQ(parse_client_override("auto"), client_override_e::automatic);
+  EXPECT_FALSE(parse_client_override("automatic"));
+  EXPECT_FALSE(parse_client_override("Tablet"));
+  EXPECT_FALSE(parse_client_override(""));
+}
+
+TEST(PostureClientOverride, AutomaticLeavesHintsUnchanged) {
+  const auto hints = parse_hints("laptop", "1", true);
+  EXPECT_EQ(apply_client_override(hints, client_override_e::automatic), hints);
+  EXPECT_EQ(apply_client_override(hints_t {}, client_override_e::automatic), hints_t {});
+}
+
+TEST(PostureClientOverride, TabletAndHandheldForcePostureAndTouch) {
+  const auto tablet = apply_client_override(parse_hints("laptop", "0"), client_override_e::tablet);
+  EXPECT_EQ(tablet.posture, client_class_e::tablet);
+  EXPECT_EQ(tablet.touch, std::optional<bool> {true});
+  const auto handheld = apply_client_override(hints_t {}, client_override_e::handheld);
+  EXPECT_EQ(handheld.posture, client_class_e::handheld);
+  EXPECT_EQ(handheld.touch, std::optional<bool> {true});
+}
+
+TEST(PostureClientOverride, DesktopKeepsTouchCapabilityAndDropsTabletState) {
+  const auto touch_device = apply_client_override(parse_hints("tablet", "1"), client_override_e::desktop);
+  EXPECT_EQ(touch_device.posture, client_class_e::laptop);
+  EXPECT_EQ(touch_device.touch, std::optional<bool> {true});
+  EXPECT_FALSE(effective_class(touch_device));
+  EXPECT_TRUE(touch_capable(touch_device));
+
+  const auto paired = apply_client_override(parse_hints("", "", true), client_override_e::desktop);
+  EXPECT_EQ(paired.posture, client_class_e::laptop);
+  EXPECT_TRUE(paired.paired_touch);
+  EXPECT_TRUE(touch_capable(paired));
+
+  const auto non_touch = apply_client_override(parse_hints("laptop", "0"), client_override_e::desktop);
+  EXPECT_EQ(non_touch.posture, client_class_e::desktop);
+  EXPECT_FALSE(touch_capable(non_touch));
+  EXPECT_EQ(apply_client_override(hints_t {}, client_override_e::desktop).posture, client_class_e::desktop);
+}
+
+TEST(PostureHostMode, ParseAndToStringRoundTrip) {
+  for (const auto policy : {handheld_policy_e::tablet, handheld_policy_e::xbox_fullscreen, handheld_policy_e::desktop}) {
+    EXPECT_EQ(parse_handheld_policy(to_string(policy)), policy);
+  }
+  EXPECT_EQ(to_string(handheld_policy_e::xbox_fullscreen), "xbox_fullscreen");
+  EXPECT_FALSE(parse_handheld_policy("xbox"));
+  EXPECT_FALSE(parse_handheld_policy(""));
+  EXPECT_EQ(to_string(host_mode_e::desktop), "desktop");
+  EXPECT_EQ(to_string(host_mode_e::tablet), "tablet");
+  EXPECT_EQ(to_string(host_mode_e::handheld), "handheld");
+}
+
+TEST(PostureHostMode, ClassAndPolicyDecideTheMode) {
+  for (const auto policy : {handheld_policy_e::tablet, handheld_policy_e::xbox_fullscreen, handheld_policy_e::desktop}) {
+    EXPECT_EQ(host_mode(hints_t {}, policy), host_mode_e::desktop);
+    EXPECT_EQ(host_mode(hints_for(client_class_e::desktop), policy), host_mode_e::desktop);
+    EXPECT_EQ(host_mode(parse_hints("laptop", "1"), policy), host_mode_e::desktop);
+    EXPECT_EQ(host_mode(hints_for(client_class_e::tablet), policy), host_mode_e::tablet);
+    EXPECT_EQ(host_mode(hints_for(client_class_e::phone), policy), host_mode_e::tablet);
+    EXPECT_EQ(host_mode(parse_hints("", "1"), policy), host_mode_e::tablet);
+    EXPECT_EQ(host_mode(parse_hints("", "", true), policy), host_mode_e::tablet);
+  }
+  EXPECT_EQ(host_mode(hints_for(client_class_e::handheld), handheld_policy_e::tablet), host_mode_e::tablet);
+  EXPECT_EQ(host_mode(hints_for(client_class_e::handheld), handheld_policy_e::xbox_fullscreen), host_mode_e::handheld);
+  EXPECT_EQ(host_mode(hints_for(client_class_e::handheld), handheld_policy_e::desktop), host_mode_e::desktop);
+}

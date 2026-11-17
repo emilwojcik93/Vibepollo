@@ -3,6 +3,10 @@
 
 namespace {
   using namespace tablet_posture;
+
+  constexpr auto desktop = client_mode_e::desktop;
+  constexpr auto tablet = client_mode_e::tablet;
+  constexpr auto handheld = client_mode_e::handheld;
 }
 
 TEST(TabletPosturePolicy, StartsAsLaptopWithoutClients) {
@@ -13,37 +17,37 @@ TEST(TabletPosturePolicy, StartsAsLaptopWithoutClients) {
 
 TEST(TabletPosturePolicy, TouchClientMakesTheHostASlate) {
   registry_t registry;
-  EXPECT_TRUE(registry.start("a55", true));
+  EXPECT_TRUE(registry.start("a55", tablet));
   EXPECT_EQ(registry.state(), state_e::slate);
 }
 
 TEST(TabletPosturePolicy, LaptopClientKeepsDesktop) {
   registry_t registry;
-  EXPECT_FALSE(registry.start("dell", false));
+  EXPECT_FALSE(registry.start("dell", desktop));
   EXPECT_EQ(registry.state(), state_e::laptop);
 }
 
 TEST(TabletPosturePolicy, KeyboardFlipFollowsRuntimeUpdates) {
   registry_t registry;
-  registry.start("dell", false);
-  EXPECT_TRUE(registry.update("dell", true));  // keyboard folded back
+  registry.start("dell", desktop);
+  EXPECT_TRUE(registry.update("dell", tablet));  // keyboard folded back
   EXPECT_EQ(registry.state(), state_e::slate);
-  EXPECT_FALSE(registry.update("dell", true));  // same class again: no change
-  EXPECT_TRUE(registry.update("dell", false));  // keyboard back
+  EXPECT_FALSE(registry.update("dell", tablet));  // same class again: no change
+  EXPECT_TRUE(registry.update("dell", desktop));  // keyboard back
   EXPECT_EQ(registry.state(), state_e::laptop);
 }
 
 TEST(TabletPosturePolicy, UpdateOfUnknownClientIsIgnored) {
   registry_t registry;
-  EXPECT_FALSE(registry.update("ghost", true));
+  EXPECT_FALSE(registry.update("ghost", tablet));
   EXPECT_EQ(registry.state(), state_e::laptop);
   EXPECT_FALSE(registry.contains("ghost"));
 }
 
 TEST(TabletPosturePolicy, SlateWhileAnyClientIsTouchPrimary) {
   registry_t registry;
-  registry.start("a55", true);
-  EXPECT_FALSE(registry.start("dell", false));
+  registry.start("a55", tablet);
+  EXPECT_FALSE(registry.start("dell", desktop));
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_FALSE(registry.stop("dell"));
   EXPECT_EQ(registry.state(), state_e::slate);
@@ -54,8 +58,8 @@ TEST(TabletPosturePolicy, SlateWhileAnyClientIsTouchPrimary) {
 
 TEST(TabletPosturePolicy, ClientWithSeveralSessionsStaysUntilTheLastEnds) {
   registry_t registry;
-  registry.start("a55", true);
-  registry.start("a55", true);
+  registry.start("a55", tablet);
+  registry.start("a55", tablet);
   EXPECT_FALSE(registry.stop("a55"));
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_TRUE(registry.stop("a55"));
@@ -70,19 +74,19 @@ TEST(TabletPosturePolicy, StoppingAnUnknownClientIsIgnored) {
 
 TEST(TabletPosturePolicy, NewSessionTakesTheLatestPosture) {
   registry_t registry;
-  registry.start("dell", true);
-  EXPECT_TRUE(registry.start("dell", false));  // resumed with the keyboard attached
+  registry.start("dell", tablet);
+  EXPECT_TRUE(registry.start("dell", desktop));  // resumed with the keyboard attached
   EXPECT_EQ(registry.state(), state_e::laptop);
 }
 
 TEST(TabletPosturePolicy, OverrideBeatsTheClients) {
   registry_t registry;
-  registry.start("dell", false);
-  registry.set_override(state_e::slate);  // simulated keyboard detach
+  registry.start("dell", desktop);
+  registry.set_override(tablet);  // simulated keyboard detach
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_EQ(registry.client_state(), state_e::laptop);
-  registry.set_override(state_e::laptop);
-  registry.update("dell", true);
+  registry.set_override(desktop);
+  registry.update("dell", tablet);
   EXPECT_EQ(registry.state(), state_e::laptop);
   EXPECT_EQ(registry.client_state(), state_e::slate);
   registry.set_override(std::nullopt);  // back to client control
@@ -91,22 +95,78 @@ TEST(TabletPosturePolicy, OverrideBeatsTheClients) {
 
 TEST(TabletPosturePolicy, OverrideWorksWithoutAnyClient) {
   registry_t registry;
-  registry.set_override(state_e::slate);
+  registry.set_override(tablet);
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_EQ(registry.size(), 0u);
-  EXPECT_EQ(registry.override_state(), std::optional<state_e> {state_e::slate});
+  EXPECT_EQ(registry.override_mode(), std::optional<client_mode_e> {tablet});
 }
 
 TEST(TabletPosturePolicy, ClientsReportEveryActiveSession) {
   registry_t registry;
-  registry.start("a55", true);
-  registry.start("a55", true);
-  registry.start("dell", false);
+  registry.start("a55", tablet);
+  registry.start("a55", tablet);
+  registry.start("dell", desktop);
   const auto clients = registry.clients();
   ASSERT_EQ(clients.size(), 2u);
   EXPECT_EQ(clients[0].id, "a55");
   EXPECT_EQ(clients[0].sessions, 2);
-  EXPECT_TRUE(clients[0].touch_primary);
+  EXPECT_EQ(clients[0].mode, tablet);
   EXPECT_EQ(clients[1].id, "dell");
-  EXPECT_FALSE(clients[1].touch_primary);
+  EXPECT_EQ(clients[1].mode, desktop);
+}
+
+TEST(TabletPosturePolicy, HandheldClientMakesASlateAndWantsGaming) {
+  registry_t registry;
+  EXPECT_FALSE(registry.gaming());
+  EXPECT_TRUE(registry.start("ally", handheld));
+  EXPECT_EQ(registry.state(), state_e::slate);
+  EXPECT_EQ(registry.mode(), handheld);
+  EXPECT_TRUE(registry.gaming());
+}
+
+TEST(TabletPosturePolicy, TabletClientDoesNotWantGaming) {
+  registry_t registry;
+  registry.start("a55", tablet);
+  EXPECT_EQ(registry.state(), state_e::slate);
+  EXPECT_FALSE(registry.gaming());
+}
+
+TEST(TabletPosturePolicy, StrongestClientModeWins) {
+  registry_t registry;
+  registry.start("a55", tablet);
+  registry.start("ally", handheld);
+  EXPECT_EQ(registry.mode(), handheld);
+  EXPECT_TRUE(registry.gaming());
+}
+
+TEST(TabletPosturePolicy, HandheldLeavingKeepsSlateWithoutGaming) {
+  registry_t registry;
+  registry.start("a55", tablet);
+  registry.start("ally", handheld);
+  EXPECT_TRUE(registry.stop("ally"));
+  EXPECT_EQ(registry.state(), state_e::slate);
+  EXPECT_FALSE(registry.gaming());
+  EXPECT_EQ(registry.mode(), tablet);
+}
+
+TEST(TabletPosturePolicy, OverrideHandheldWorksWithoutAnyClient) {
+  registry_t registry;
+  registry.set_override(handheld);
+  EXPECT_EQ(registry.state(), state_e::slate);
+  EXPECT_TRUE(registry.gaming());
+  EXPECT_EQ(registry.client_mode(), desktop);
+  registry.set_override(std::nullopt);
+  EXPECT_EQ(registry.state(), state_e::laptop);
+  EXPECT_FALSE(registry.gaming());
+}
+
+TEST(TabletPosturePolicy, OverrideDesktopBeatsAStreamingHandheld) {
+  registry_t registry;
+  registry.start("ally", handheld);
+  registry.set_override(desktop);
+  EXPECT_EQ(registry.state(), state_e::laptop);
+  EXPECT_FALSE(registry.gaming());
+  EXPECT_EQ(registry.client_mode(), handheld);
+  registry.set_override(std::nullopt);
+  EXPECT_TRUE(registry.gaming());
 }

@@ -26,6 +26,7 @@ export interface ClientDeviceDraft {
   name: string;
   allowSleep: boolean;
   touchDevice: boolean;
+  postureMode: string;
   permissions: number;
   enableLegacyOrdering: boolean;
   allowClientCommands: boolean;
@@ -240,6 +241,13 @@ const displayOverrideSummary = computed(() => {
         });
   return mode;
 });
+
+const postureModeOptions = computed(() => [
+  { label: t('ui.devices.editor.posture_mode_auto'), value: 'auto' },
+  { label: t('ui.devices.editor.posture_mode_desktop'), value: 'desktop' },
+  { label: t('ui.devices.editor.posture_mode_tablet'), value: 'tablet' },
+  { label: t('ui.devices.editor.posture_mode_handheld'), value: 'handheld' },
+]);
 
 const hdrProfileOptions = computed(() => {
   const profiles = [...props.hdrProfiles].sort(
@@ -464,6 +472,22 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
             <span class="vs-switch__track" aria-hidden="true" />
             <span class="vs-sr-only">{{ t('ui.devices.editor.touch_device') }}</span>
           </label>
+        </SettingRow>
+        <SettingRow
+          :label="t('ui.devices.editor.posture_mode')"
+          :description="t('ui.devices.editor.posture_mode_description')"
+          :control-id="`${controlIdPrefix}-posture-mode`"
+        >
+          <select
+            :id="`${controlIdPrefix}-posture-mode`"
+            v-model="draft.postureMode"
+            class="vs-select"
+            :disabled="busy"
+          >
+            <option v-for="option in postureModeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
         </SettingRow>
         <SettingRow :label="t('pin.device_name')" :control-id="`${controlIdPrefix}-name`">
           <input

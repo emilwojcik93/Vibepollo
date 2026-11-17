@@ -2561,6 +2561,9 @@ namespace nvhttp {
           if (named_cert_p->touch_device) {
             named_cert_node["touch_device"] = true;
           }
+          if (named_cert_p->posture_mode != "auto") {
+            named_cert_node["posture_mode"] = named_cert_p->posture_mode;
+          }
           named_cert_node["always_use_virtual_display"] = named_cert_p->always_use_virtual_display;
           named_cert_node["requested_resolution_only"] = named_cert_p->requested_resolution_only;
           if (named_cert_p->prefer_10bit_sdr) {
@@ -2709,6 +2712,13 @@ namespace nvhttp {
               named_cert_p->allow_client_commands = util::get_non_string_json_value<bool>(el, "allow_client_commands", true);
               named_cert_p->allow_sleep = el.contains("allow_sleep") && el["allow_sleep"].is_boolean() && el["allow_sleep"].get<bool>();
               named_cert_p->touch_device = el.contains("touch_device") && el["touch_device"].is_boolean() && el["touch_device"].get<bool>();
+              named_cert_p->posture_mode = "auto";
+              if (el.contains("posture_mode") && el["posture_mode"].is_string()) {
+                const auto loaded_posture_mode = el["posture_mode"].get<std::string>();
+                if (posture::parse_client_override(loaded_posture_mode)) {
+                  named_cert_p->posture_mode = loaded_posture_mode;
+                }
+              }
               named_cert_p->always_use_virtual_display = util::get_non_string_json_value<bool>(el, "always_use_virtual_display", false);
               named_cert_p->requested_resolution_only = util::get_non_string_json_value<bool>(el, "requested_resolution_only", false);
               named_cert_p->prefer_10bit_sdr =
@@ -3438,10 +3448,13 @@ namespace nvhttp {
       }
       launch_session->unique_id = get_arg(args, "uniqueid", "unknown");
       launch_session->perm = verified_client->perm;
-      launch_session->client_posture = posture::parse_hints(
-        get_arg(args, "clientPosture", ""),
-        get_arg(args, "clientTouch", ""),
-        verified_client->touch_device
+      launch_session->client_posture = posture::apply_client_override(
+        posture::parse_hints(
+          get_arg(args, "clientPosture", ""),
+          get_arg(args, "clientTouch", ""),
+          verified_client->touch_device
+        ),
+        posture::parse_client_override(verified_client->posture_mode).value_or(posture::client_override_e::automatic)
       );
       // Contract v2: the legacy clientDiagonalMm and clientDpi arguments of older clients are never read.
       const int touch_diagonal_mm = posture::sanitize_touch_diagonal_mm(config::video.touch_posture_diagonal_mm);
@@ -3449,8 +3462,12 @@ namespace nvhttp {
       if (const auto session_size = posture::derive_physical_size(launch_session->client_posture, launch_session->width, launch_session->height, touch_diagonal_mm)) {
         const auto state_class = posture::effective_class(launch_session->client_posture);
         const auto reported_class = state_class ? state_class : launch_session->client_posture.posture;
+        const auto launch_host_mode = tablet_posture::host_mode_for(launch_session->client_posture);
+        const auto launch_mode_text = launch_host_mode == posture::host_mode_e::handheld ? " (handheld mode)"sv :
+                                      launch_host_mode == posture::host_mode_e::tablet   ? " (tablet mode)"sv :
+                                                                                           " (keyboard attached, desktop mode)"sv;
         BOOST_LOG(info) << "Client posture class "sv << (reported_class ? posture::to_string(*reported_class) : "touch"sv)
-                        << (state_class ? " (tablet mode)"sv : " (keyboard attached, desktop mode)"sv)
+                        << launch_mode_text
                         << ": virtual display physical size "sv << session_size->width_mm << 'x' << session_size->height_mm
                         << " mm, diagonal "sv << posture::size_diagonal_mm(*session_size) << " mm (host touch_posture_diagonal_mm "sv << touch_diagonal_mm << ")"sv;
       }
@@ -4664,6 +4681,7 @@ namespace nvhttp {
         named_cert_node["allow_client_commands"] = named_cert->allow_client_commands;
         named_cert_node["allow_sleep"] = named_cert->allow_sleep;
         named_cert_node["touch_device"] = named_cert->touch_device;
+        named_cert_node["posture_mode"] = named_cert->posture_mode;
         named_cert_node["always_use_virtual_display"] = named_cert->always_use_virtual_display;
         named_cert_node["requested_resolution_only"] = named_cert->requested_resolution_only;
 #ifdef _WIN32
@@ -7324,15 +7342,19 @@ launch_session->exact_target_hold.reset();
     }
 
     auto args = request->parse_query_string();
-    const auto hints = posture::parse_hints(
+    const auto client_hints = posture::parse_hints(
       get_arg(args, "clientPosture", ""),
       get_arg(args, "clientTouch", ""),
       verified_client->touch_device
     );
-    if (!hints.has_client_hints()) {
+    if (!client_hints.has_client_hints()) {
       fail(400, "Missing or invalid posture parameters");
       return;
     }
+    const auto hints = posture::apply_client_override(
+      client_hints,
+      posture::parse_client_override(verified_client->posture_mode).value_or(posture::client_override_e::automatic)
+    );
 
     const auto connected_uuids = rtsp_stream::get_all_session_uuids();
     if (std::find(connected_uuids.begin(), connected_uuids.end(), verified_client->uuid) == connected_uuids.end()) {
@@ -7356,11 +7378,11 @@ launch_session->exact_target_hold.reset();
         fail(429, "Too many posture updates; wait at least one second between calls");
         return;
       case update_status_e::unchanged:
-        tablet_posture::client_updated(verified_client->uuid, posture::effective_class(hints).has_value());
+        tablet_posture::client_updated(verified_client->uuid, tablet_posture::to_client_mode(tablet_posture::host_mode_for(hints)));
         BOOST_LOG(debug) << "Client ["sv << verified_client->name << "] posture update leaves the virtual display size at "sv << size_text(update.current);
         break;
       case update_status_e::changed:
-        tablet_posture::client_updated(verified_client->uuid, posture::effective_class(hints).has_value());
+        tablet_posture::client_updated(verified_client->uuid, tablet_posture::to_client_mode(tablet_posture::host_mode_for(hints)));
         BOOST_LOG(info) << "Client ["sv << verified_client->name << "] posture update changes the wanted virtual display size from "sv
                         << size_text(update.previous) << " to "sv << size_text(update.current)
                         << (update.boundary_crossed ? " (crosses the touch size boundary)"sv : ""sv)
@@ -8387,6 +8409,31 @@ launch_session->exact_target_hold.reset();
         }
 
         named_cert->touch_device = touch_device;
+        updated = true;
+        break;
+      }
+    }
+
+    if (updated) {
+      save_state();
+    }
+    return updated;
+  }
+
+  bool set_client_posture_mode(const std::string &uuid, const std::string &mode) {
+    if (uuid.empty() || !posture::parse_client_override(mode)) {
+      return false;
+    }
+
+    bool updated = false;
+    {
+      std::lock_guard<std::mutex> lock(client_mutex);
+      for (auto &named_cert : client_root.named_devices) {
+        if (named_cert->uuid != uuid) {
+          continue;
+        }
+
+        named_cert->posture_mode = mode;
         updated = true;
         break;
       }
