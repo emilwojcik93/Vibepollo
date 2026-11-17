@@ -221,9 +221,14 @@ namespace {
     }
 
     HRESULT STDMETHODCALLTYPE HandleFocusChangedEvent(IUIAutomationElement *sender) override {
-      if (sender && !element_is_keyboard(sender)) {
-        focus_event_editable = element_is_editable(sender);
-        have_focus_event = true;
+      if (sender) {
+        const bool keyboard = element_is_keyboard(sender);
+        if (!keyboard) {
+          focus_event_editable = element_is_editable(sender);
+          have_focus_event = true;
+        }
+        log_line("focus event: control type", last_control_type);
+        log_line("focus event: editable|keyboard bits", (focus_event_editable ? 1 : 0) | (keyboard ? 2 : 0));
       }
       return S_OK;
     }
