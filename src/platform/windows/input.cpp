@@ -23,6 +23,7 @@
 // local includes
 #include "keylayout.h"
 #include "misc.h"
+#include "src/touch_ux.h"
 #include "src/config.h"
 #include "src/globals.h"
 #include "src/logging.h"
@@ -1211,6 +1212,7 @@ namespace platf {
    * @param touch The touch event.
    */
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
+    touch_ux::note_touch();
     auto raw = (client_input_raw_t *) input;
 
     // Bail if we're not running on an OS that supports virtual touch input
@@ -1333,6 +1335,7 @@ namespace platf {
    * @param pen The pen event.
    */
   void pen_update(client_input_t *input, const touch_port_t &touch_port, const pen_input_t &pen) {
+    touch_ux::note_touch();
     auto raw = (client_input_raw_t *) input;
 
     // Bail if we're not running on an OS that supports virtual pen input

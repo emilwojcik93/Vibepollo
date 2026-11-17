@@ -57,7 +57,9 @@ extern "C" {
 #include "nvhttp.h"
 #include "host_stream_control.h"
 #include "platform/common.h"
+#include "posture_size.h"
 #include "process.h"
+#include "touch_ux.h"
 #include "pyrowave_policy.h"
 #include "pyrowave_bandwidth.h"
 #include "pyrowave_protocol.h"
@@ -645,6 +647,8 @@ namespace stream {
   };
 
   struct session_t {
+    bool touch_primary = false;  ///< The client posture selected the touch size policy (phone, tablet or handheld).
+    bool touch_ux_held = false;  ///< This session holds a touch_ux::acquire() reference.
     std::shared_ptr<void> display_power_guard;
     std::shared_ptr<void> audio_context_guard;
     std::shared_ptr<void> normal_display_capture;
@@ -4235,6 +4239,11 @@ namespace stream {
       session.display_power_guard.reset();
       BOOST_LOG(info) << "Session ended"sv;
 
+      if (session.touch_ux_held) {
+        session.touch_ux_held = false;
+        touch_ux::release();
+      }
+
       // Record session end in persistent history (fires exactly once, after join)
       session_history::end_session(session.history_uuid);
 
@@ -4357,6 +4366,11 @@ namespace stream {
         meta.audio_channels = session.audio_disabled ? 0 : session.config.audio.channels;
         meta.server_version = current_server_version();
         session_history::begin_session(meta);
+      }
+
+      if (session.touch_primary && !session.touch_ux_held) {
+        touch_ux::acquire();
+        session.touch_ux_held = true;
       }
 
       // If this is the first session, invoke the platform callbacks
@@ -4541,6 +4555,7 @@ namespace stream {
       // a distinct row in the session_history database.
       session->history_uuid = uuid_util::uuid_t::generate().string();
       session->permission = launch_session.perm;
+      session->touch_primary = posture::effective_class(launch_session.client_posture).has_value();
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);

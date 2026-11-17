@@ -979,6 +979,8 @@ namespace config {
     },  // display_device
 
     356,  // touch_posture_diagonal_mm (14 in; range 100-419)
+    true,  // touch_keyboard_assist
+    true,  // touch_taskbar_autohide
     0,  // max_bitrate
     20,  // minimum_fps_target (FPS; 0 uses the capture/encoder path fallback)
     true,  // wgc_pacing_smoothing
@@ -2074,6 +2076,8 @@ namespace config {
         }
       }
     }
+    bool_f(vars, "touch_keyboard_assist", video.touch_keyboard_assist);
+    bool_f(vars, "touch_taskbar_autohide", video.touch_taskbar_autohide);
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 

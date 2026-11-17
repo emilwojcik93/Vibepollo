@@ -136,6 +136,22 @@ disturbed. The host recomputes the wanted size and logs a change; it applies at 
 next launch or resume, which recreates the display when the change crosses the touch
 boundary.
 
+## Touch session UX (Windows)
+
+A real touch screen makes Windows show the touch keyboard when a text field is tapped and
+lets the shell use its tablet behavior. Touch that the host injects does neither: the
+shell ignores injected touch for the keyboard, even on a handheld that has a real touch
+screen. While a touch-primary session streams, the host therefore:
+
+- **Keyboard assist** (`touch_keyboard_assist`): watches UI Automation focus. A focused text
+  field within 2.5 s after injected touch shows the touch keyboard; when focus leaves
+  text fields the keyboard is hidden again, but only if the host showed it.
+- **Taskbar auto-hide** (`touch_taskbar_autohide`): switches the taskbar to auto-hide and
+  restores it when the last touch session ends. A journal file in the config folder
+  restores it at the next start if the host stopped abnormally.
+
+Both run in the host process and need the host to run in the desktop session.
+
 ## Status
 
 `GET /api/clients/list` adds a `posture` object to every client that is streaming:
