@@ -1,0 +1,25 @@
+name: probe-tablet-posture
+on:
+  push:
+    branches: [probe/tablet-posture]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: build
+        shell: msys2 {0}
+        run: |
+          for o in O0 O2; do
+            g++ -std=gnu++23 -$o -DNDEBUG -Wall -Wextra -Werror -D_WIN32_WINNT=0x0A00 -static -Iprobe-tp/stub -I. -o tablet-probe-$o.exe probe-tp/probe.cpp src/platform/windows/tablet_posture.cpp -lsetupapi -lnewdev -ladvapi32
+          done
+          ls -la tablet-probe-*.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tablet-probe
+          path: tablet-probe-*.exe
