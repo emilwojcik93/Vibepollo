@@ -27,6 +27,25 @@
 using Microsoft::WRL::ComPtr;
 using namespace std::chrono_literals;
 
+// Interfaces implemented by the shell, not by this program. They must have external linkage: in an
+// anonymous namespace the compiler sees no possible implementer and optimizes calls through them
+// into undefined behavior (-O2 and up jump to address zero of the image).
+namespace touch_ux_com {
+struct ITipInvocationLocal: IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
+};
+
+struct IFrameworkInputPaneLocal: IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
+};
+}  // namespace touch_ux_com
+
+using touch_ux_com::IFrameworkInputPaneLocal;
+using touch_ux_com::ITipInvocationLocal;
+
 namespace {
   const GUID clsid_cuiautomation = {0xff48dba4, 0x60ef, 0x4201, {0xaa, 0x87, 0x54, 0x10, 0x3e, 0xef, 0x59, 0x4e}};
   const GUID iid_iuiautomation = {0x30cbe57d, 0xd9d0, 0x452a, {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
@@ -36,17 +55,6 @@ namespace {
   const GUID clsid_input_pane = {0xd5120aa3, 0x46ba, 0x44c5, {0x82, 0x2d, 0xca, 0x80, 0x92, 0xc1, 0xfc, 0x72}};
   const GUID iid_input_pane = {0x5752238b, 0x24f0, 0x495a, {0x82, 0xf1, 0x2f, 0xd5, 0x93, 0x05, 0x67, 0x96}};
 
-  struct ITipInvocationLocal: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
-  };
-
-  struct IFrameworkInputPaneLocal: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
-  };
-
   constexpr auto touch_recent_window = 2500ms;
   constexpr auto hide_delay = 350ms;
   constexpr auto poll_interval = 200ms;
@@ -54,8 +62,6 @@ namespace {
   std::atomic<long long> last_touch_ticks {0};
   std::atomic<bool> stop_requested {false};
   FILE *log_file = nullptr;
-  bool trace = true;
-  void T(const char *what);
 
   void log_line(const char *text, long value = 0) {
     if (!log_file) {
@@ -78,24 +84,13 @@ namespace {
     return result;
   }
 
-  void T(const char *what) {
-    if (trace && log_file) {
-      std::fprintf(log_file, "T %s\n", what);
-      std::fflush(log_file);
-    }
-  }
-
   bool osk_visible() {
-    T("osk_visible enter");
     ComPtr<IFrameworkInputPaneLocal> pane = create_instance<IFrameworkInputPaneLocal>(clsid_input_pane, CLSCTX_INPROC_SERVER, iid_input_pane);
     if (!pane) {
       return false;
     }
-    T("pane created");
     RECT rect {};
-    const HRESULT loc = pane->Location(&rect);
-    T("location returned");
-    if (FAILED(loc)) {
+    if (FAILED(pane->Location(&rect))) {
       return false;
     }
     return rect.right - rect.left > 0 && rect.bottom - rect.top > 0;
@@ -111,17 +106,14 @@ namespace {
   }
 
   bool focused_element_is_editable(IUIAutomation *automation) {
-    T("focused enter");
     ComPtr<IUIAutomationElement> element;
     if (FAILED(automation->GetFocusedElement(element.GetAddressOf())) || !element) {
       return false;
     }
-    T("got element");
     CONTROLTYPEID type = 0;
     if (FAILED(element->get_CurrentControlType(&type))) {
       return false;
     }
-    T("got control type");
     if (type != UIA_EditControlTypeId && type != UIA_DocumentControlTypeId) {
       return false;
     }
@@ -130,7 +122,6 @@ namespace {
     if (SUCCEEDED(element->GetCurrentPatternAs(UIA_ValuePatternId, iid_value_pattern, &pattern)) && pattern) {
       value.Attach(static_cast<IUIAutomationValuePattern *>(pattern));
     }
-    T("pattern queried");
     if (value) {
       BOOL read_only = FALSE;
       if (SUCCEEDED(value->get_CurrentIsReadOnly(&read_only))) {
@@ -204,10 +195,7 @@ int main(int argc, char **argv) {
       first_poll = false;
     }
     const bool editable = focused_element_is_editable(automation.Get());
-    T("editable done");
     const bool visible = osk_visible();
-    T("visible done");
-    trace = false;
     if (editable) {
       hide_pending = false;
       if (!visible && recent && !last_editable) {
