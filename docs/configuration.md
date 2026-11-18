@@ -2508,8 +2508,8 @@ These settings are host-wide and are not application runtime overrides.
         <td colspan="2">
             Windows only. What a client that reports the <code>handheld</code> class gets while it streams.
             <code>xbox_fullscreen</code> reports the host as a tablet (see <code>touch_tablet_mode</code>) and asks
-            Windows for the Xbox full screen experience; where Windows cannot enter it (older build, no Xbox app) the
-            handheld client gets tablet mode. <code>tablet</code> never asks for the Xbox full screen experience.
+            Windows for the Xbox full screen experience; where Windows cannot enter it (older build, or no home app
+            chosen under Settings &gt; Gaming &gt; Xbox mode) the handheld client gets tablet mode. <code>tablet</code> never asks for the Xbox full screen experience.
             <code>desktop</code> treats handheld clients like
             keyboard-attached desktops. A client can override this with its own host mode in the web UI.
             Has no effect when <code>touch_tablet_mode</code> is disabled. See docs/touch-posture.md.

@@ -194,13 +194,45 @@ Which mode a client gets, from its state (`effective_class`):
 
 - `handheld_mode` (host option): `xbox_fullscreen` (default) makes handheld clients handheld, `tablet` treats them
   like tablets, `desktop` treats them like keyboard-attached desktops. Where Windows cannot enter the Xbox full
-  screen experience (older build, no Xbox app) a handheld client gets tablet mode.
+  screen experience (see below) a handheld client gets tablet mode.
 - `posture_mode` (per paired client, set in the web UI as "Host mode for this device" or through
   `POST /api/clients/update`): `auto` (default) follows the client's own posture; `desktop`, `tablet` and
   `handheld` force that mode for the client. The override applies at launch/resume and to `/posture` updates.
   A forced `desktop` on a touch-capable client keeps its touch-sized virtual display.
 - With several clients the strongest mode wins: handheld, then tablet, then desktop.
 - `touch_tablet_mode = disabled` turns all of this off: the host never reports a slate or the gaming posture.
+
+## Xbox full screen experience (Windows)
+
+Windows calls its Xbox full screen experience ("Xbox mode") the *gaming posture*. In handheld mode the host
+enters it right after the slate switch and leaves it, after the same 3 s grace, before it goes back to laptop.
+
+What Windows needs before anything can enter it:
+
+- A build that offers it (`IsGamingFullScreenExperienceSupported`). The host never enables it on a build that does not.
+- A home app for the logged-on user: Settings > Gaming > Xbox mode > Choose home app, normally the Xbox app
+  (stored as `GamingHomeApp` under the user's `GamingConfiguration` key). Without one Windows offers no switch.
+
+How the host switches:
+
+- Windows grants `SetGamingFullScreenExperience` only to a process that runs as the logged-on user; a service
+  account is refused, also while impersonating, and is told the experience is inactive. The host service
+  therefore starts its own executable as the logged-on user with `--gaming-posture-switch enter|leave`. That
+  instance does no host initialization: it reads the state, switches only when the state differs, waits for
+  Windows to confirm and returns the result as its exit code. A host that already runs as the user calls the
+  switch directly. No keyboard shortcut is sent.
+- Windows asks for confirmation when entering and leaving, and remembers the answers per user under
+  `GamingConfiguration\SystemDialogResults`. While it switches, the host supplies the answer "switch now, no
+  restart" for the confirmations that have none, and removes exactly those afterwards; an answer the user gave
+  is never touched. A journal file in the config folder removes leftovers at the next start if the host
+  stopped abnormally.
+
+When the switch does not happen (no home app, an older build, a confirmation the host does not know) the log
+says why and the client keeps tablet mode. The host does not retry until the wanted mode changes.
+
+Log lines: `Tablet posture: host is now in the Xbox full screen experience`,
+`Gaming posture: Windows cannot enter the Xbox full screen experience: the logged-on user has no home app. ...`,
+`Tablet posture: could not enter the Xbox full screen experience; staying in tablet mode`.
 
 ## Status
 
