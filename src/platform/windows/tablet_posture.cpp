@@ -27,10 +27,9 @@
 #include <string>
 
 // platform includes
-#include <winsock2.h>
-#include <windows.h>
-
 #include <setupapi.h>
+#include <windows.h>
+#include <winsock2.h>
 
 // local includes
 #include "src/logging.h"

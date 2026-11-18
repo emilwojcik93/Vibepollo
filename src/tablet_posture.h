@@ -15,14 +15,14 @@
  */
 #pragma once
 
+#include "posture_size.h"
+#include "tablet_posture_policy.h"
+
 #include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "posture_size.h"
-#include "tablet_posture_policy.h"
 
 namespace tablet_posture {
   /// The mode a client's host mode asks of the posture backend.
