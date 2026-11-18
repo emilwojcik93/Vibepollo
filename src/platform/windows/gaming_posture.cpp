@@ -8,15 +8,12 @@
  * CanSetGamingFullScreenExperience telling whether the switch is available. It is once the user has a
  * home app (Settings > Gaming > Xbox mode, normally the Xbox app); without one nothing can enter.
  *
- * Windows also offers every user the Win+F11 shortcut, handled by the same controller. This backend
- * never toggles blindly: it reads the state, uses the switch when Windows allows it, otherwise
- * presses the shortcut only when the state differs, and then confirms the new state. When the
- * experience is not supported, has no home app, or does not change, the caller keeps the host in
- * tablet mode.
- *
  * Windows refuses the switch (E_ACCESSDENIED) for a process that does not run as the logged-on user,
- * also while such a process impersonates that user. A host service therefore starts this executable
- * once more as the user, with gaming_switch_arg: that instance only calls the switch and exits.
+ * also while such a process impersonates that user, and reports the experience as inactive to it. A
+ * host service therefore starts this executable once more as the user, with gaming_switch_arg: that
+ * instance reads the state, switches only when it differs, confirms the new state and reports it as
+ * its exit code. There is no blind toggle (the Win+F11 shortcut is not used). When the experience is
+ * not supported, has no home app, or does not change, the caller keeps the host in tablet mode.
  *
  * Entering and leaving ask for confirmation. Windows remembers the answers in the user's hive under
  * GamingConfiguration\SystemDialogResults; the machine hive is not consulted. The answers are
@@ -199,20 +196,40 @@ namespace tablet_posture::backend {
       return (api.active() != FALSE) == wanted;
     }
 
-    /// Ask Windows for the switch from this process. The call does not return while Windows shows a
-    /// confirmation, so it runs on its own thread; callers bound it with wait_for_active().
-    void request_switch(bool enter) {
-      std::thread([set = gaming_api().set, enter] {
+    /// Verdict of a switch, also the exit code of the switch instance.
+    enum switch_result_e : int {
+      switched = 0,  ///< The host is in the wanted state.
+      unchanged = 1,  ///< Windows did not change state in time; a confirmation may be waiting on screen.
+      bad_request = 2,
+      unsupported = 3,
+      no_home_app = 4,  ///< The user chose no home app, so Windows offers no switch.
+    };
+
+    /// Switch from this process, which must run as the logged-on user. The call into Windows does not
+    /// return while a confirmation is open, so it runs on its own thread and the state wait bounds it.
+    switch_result_e switch_in_process(bool enter) {
+      const auto &api = gaming_api();
+      if (!api.supported || !api.active || !api.set || api.supported() == FALSE) {
+        return unsupported;
+      }
+      if ((api.active() != FALSE) == enter) {
+        return switched;
+      }
+      if (!api.can_set || api.can_set() == FALSE) {
+        return no_home_app;
+      }
+      std::thread([set = api.set, enter] {
         set(enter ? TRUE : FALSE);
       }).detach();
+      return wait_for_active(enter) ? switched : unchanged;
     }
 
-    /// Start this executable as the logged-on user to make the switch there.
-    bool request_switch_as_user(bool enter) {
+    /// Start this executable as the logged-on user to make the switch there, and wait for its verdict.
+    switch_result_e switch_as_user(bool enter) {
       wchar_t executable[MAX_PATH] = {};
       const DWORD length = GetModuleFileNameW(nullptr, executable, ARRAYSIZE(executable));
       if (length == 0 || length >= ARRAYSIZE(executable)) {
-        return false;
+        return unchanged;
       }
       std::string cmd = "\"" + platf::to_utf8(executable) + "\" ";
       cmd += tablet_posture::gaming_switch_arg;
@@ -224,104 +241,69 @@ namespace tablet_posture::backend {
       auto child = platf::run_command(false, false, cmd, working_dir, env, nullptr, ec, nullptr);
       if (ec) {
         BOOST_LOG(warning) << "Gaming posture: could not start the switch as the logged-on user: "sv << ec.message();
-        return false;
+        return unchanged;
       }
-      child.detach();
-      return true;
-    }
-
-    /// Press Win+F11 on the input desktop, the shortcut Windows documents for this switch.
-    bool press_shortcut() {
-      platf::syncThreadDesktop();
-      std::array<INPUT, 4> keys {};
-      const auto key = [](INPUT &slot, WORD code, bool release) {
-        slot.type = INPUT_KEYBOARD;
-        slot.ki.wVk = code;
-        slot.ki.dwFlags = release ? KEYEVENTF_KEYUP : 0;
-      };
-      key(keys[0], VK_LWIN, false);
-      key(keys[1], VK_F11, false);
-      key(keys[2], VK_F11, true);
-      key(keys[3], VK_LWIN, true);
-      return SendInput(static_cast<UINT>(keys.size()), keys.data(), sizeof(INPUT)) == keys.size();
+      // The instance gives up after switch_timeout; allow for its start on top of that.
+      const auto deadline = std::chrono::steady_clock::now() + switch_timeout + 4s;
+      while (child.running(ec) && !ec) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+          child.detach();
+          return unchanged;
+        }
+        std::this_thread::sleep_for(switch_poll);
+      }
+      const int code = child.exit_code();
+      return code >= switched && code <= no_home_app ? static_cast<switch_result_e>(code) : unchanged;
     }
   }  // namespace
 
   bool apply_gaming(bool enter) {
     const auto &api = gaming_api();
-    if (!api.supported || !api.active || api.supported() == FALSE) {
+    if (!api.supported || !api.set || api.supported() == FALSE) {
       if (enter) {
         BOOST_LOG(warning) << "Gaming posture: this Windows does not offer the Xbox full screen experience"sv;
       }
       return !enter;
     }
 
-    if ((api.active() != FALSE) == enter) {
-      if (!enter) {
-        withdraw_answers();
-      }
-      return true;
-    }
-
     supply_answers();
 
-    bool switched = false;
-    if (api.set && api.can_set && api.can_set() != FALSE) {
-      // This host runs as the logged-on user and that user has a home app.
-      request_switch(enter);
-      switched = wait_for_active(enter);
-    } else if (api.set && request_switch_as_user(enter)) {
-      switched = wait_for_active(enter);
-    }
-    if (!switched) {
-      if (!press_shortcut()) {
-        BOOST_LOG(warning) << "Gaming posture: could not send the Win+F11 shortcut"sv;
-      }
-      switched = wait_for_active(enter);
-    }
+    // Only a host that runs as the logged-on user is offered the switch itself.
+    const bool own_switch = api.can_set && api.can_set() != FALSE;
+    const auto result = own_switch ? switch_in_process(enter) : switch_as_user(enter);
 
-    if (!switched && enter) {
-      BOOST_LOG(warning) << "Gaming posture: Windows did not enter the Xbox full screen experience. "
-                            "Check that the Xbox app is installed and chosen as the home app under "
-                            "Settings > Gaming > Xbox mode, and that no confirmation is waiting on the host screen."sv;
-    }
-    if (!enter || !switched) {
-      // Nothing more to confirm once the host is back on the desktop, or when it never left it.
-      if ((api.active() != FALSE) == false) {
-        withdraw_answers();
+    if (result != switched) {
+      const auto action = enter ? "enter"sv : "leave"sv;
+      if (result == no_home_app) {
+        BOOST_LOG(warning) << "Gaming posture: Windows cannot "sv << action
+                           << " the Xbox full screen experience: the logged-on user has no home app. "sv
+                           << "Choose one under Settings > Gaming > Xbox mode (the Xbox app)."sv;
+      } else if (result == unsupported) {
+        BOOST_LOG(warning) << "Gaming posture: Windows does not offer the Xbox full screen experience to the logged-on user"sv;
+      } else {
+        BOOST_LOG(warning) << "Gaming posture: Windows did not "sv << action
+                           << " the Xbox full screen experience. A confirmation may be waiting on the host screen."sv;
       }
     }
-    return switched;
+    if (!enter || result != switched) {
+      // Nothing more to confirm once the host is back on the desktop, or when it never left it.
+      withdraw_answers();
+    }
+    return result == switched;
   }
 
   void recover_gaming() {
-    const auto &api = gaming_api();
-    if (api.active && api.active() != FALSE) {
-      return;  // Still in the experience (a host restart during a session); the answers are needed to leave.
-    }
+    // A leave supplies its answers again, so nothing a previous host process left behind is needed.
     withdraw_answers();
   }
 }  // namespace tablet_posture::backend
 
 namespace tablet_posture {
   int run_gaming_switch(int argc, char **argv) {
-    using namespace backend;
     const std::string_view verb = argc > 2 ? argv[2] : "";
     if (verb != "enter"sv && verb != "leave"sv) {
-      return 2;
+      return backend::bad_request;
     }
-    const bool enter = verb == "enter"sv;
-    const auto &api = gaming_api();
-    if (!api.supported || !api.active || !api.set || api.supported() == FALSE) {
-      return 3;
-    }
-    if ((api.active() != FALSE) == enter) {
-      return 0;
-    }
-    if (!api.can_set || api.can_set() == FALSE) {
-      return 4;  // No home app chosen for this user.
-    }
-    request_switch(enter);
-    return wait_for_active(enter) ? 0 : 1;
+    return backend::switch_in_process(verb == "enter"sv);
   }
 }  // namespace tablet_posture
