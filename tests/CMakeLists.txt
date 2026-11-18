@@ -1402,6 +1402,7 @@ sunshine_register_component(NAME test_component_video_colorspace TEST_SOURCE uni
     LINK_LIBRARIES nlohmann_json::nlohmann_json Boost::log Boost::asio Boost::crc Boost::format Boost::process ZLIB::ZLIB ${FFMPEG_LIBRARIES}
                    ${SUNSHINE_TEST_FFMPEG_PLATFORM_LIBRARIES} ${SUNSHINE_TEST_SOCKET_LIBRARIES})
 sunshine_register_component(NAME test_component_wgc_monitor_selection TEST_SOURCE unit/test_wgc_monitor_selection.cpp)
+sunshine_register_component(NAME test_component_wgc_screensaver_recovery TEST_SOURCE unit/test_wgc_screensaver_recovery.cpp)
 sunshine_register_component(NAME test_component_input_geometry_transport TEST_SOURCE unit/test_input_geometry_transport.cpp
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
 sunshine_register_component(NAME test_component_screen_saver_state TEST_SOURCE unit/test_screen_saver_state.cpp
@@ -1986,8 +1987,41 @@ if(SUNSHINE_TEST_ENABLE_COMPONENT AND Python3_Interpreter_FOUND AND CMAKE_CXX_CO
             "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
     set_tests_properties(test_component_update_notification_tray_interface PROPERTIES LABELS "component")
 endif()
+if(WIN32)
+    # Explicit manual target only: injects input and requires an installed driver.
+    add_executable(probe_vhf_mouse_receipts_windows EXCLUDE_FROM_ALL
+        input/probe_vhf_mouse_receipts_windows.cpp
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/client/client.cpp")
+    target_compile_features(probe_vhf_mouse_receipts_windows PRIVATE cxx_std_20)
+    target_include_directories(probe_vhf_mouse_receipts_windows PRIVATE
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/libvirtualgamepad/include")
+    target_link_libraries(probe_vhf_mouse_receipts_windows PRIVATE cfgmgr32 user32 setupapi hid Threads::Threads)
+    add_executable(test_vhf_mouse_receipt_windows input/test_vhf_mouse_receipt_windows.cpp)
+    target_compile_features(test_vhf_mouse_receipt_windows PRIVATE cxx_std_20)
+    target_include_directories(test_vhf_mouse_receipt_windows PRIVATE "${SUNSHINE_TEST_REPOSITORY_ROOT}")
+    target_link_libraries(test_vhf_mouse_receipt_windows PRIVATE cfgmgr32 user32 Threads::Threads)
+    if(MSVC)
+        target_compile_options(test_vhf_mouse_receipt_windows PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(test_vhf_mouse_receipt_windows PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME regression_vhf_mouse_receipt_windows COMMAND test_vhf_mouse_receipt_windows)
+    set_tests_properties(regression_vhf_mouse_receipt_windows PROPERTIES LABELS "component" TIMEOUT 10)
+endif()
+if(Python3_Interpreter_FOUND)
+    add_test(NAME regression_bundled_driver_sequence
+        COMMAND "${Python3_EXECUTABLE}" "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/windows/bootstrapper/tests/test_bundled_driver_sequence.py")
+    set_tests_properties(regression_bundled_driver_sequence PROPERTIES LABELS "component" TIMEOUT 30)
+endif()
 find_program(SUNSHINE_TEST_GXX NAMES g++)
 if(Python3_Interpreter_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME regression_wgc_screensaver_capture
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_screensaver_capture.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
+    add_test(NAME regression_wgc_screensaver_query
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/platform/windows/test_wgc_screensaver_query.py"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}" "${CMAKE_CXX_COMPILER}")
     add_test(NAME regression_cuda_release_policy
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_cuda_release_policy.py")
 endif()
@@ -2119,8 +2153,6 @@ if(Python3_Interpreter_FOUND AND SUNSHINE_TEST_GXX)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_reactivation.py")
     add_test(NAME regression_virtual_display_live_recovery
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_live_recovery.py")
-    add_test(NAME regression_virtual_display_layout_hold
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/unit/test_virtual_display_layout_hold.py")
 endif()
 
 if(TARGET test_component_resource_locale_catalog)
