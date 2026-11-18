@@ -31,8 +31,8 @@
 #include <vector>
 
 // platform includes
-#include <windows.h>
 #include <winsock2.h>
+#include <windows.h>
 
 // local includes
 #include "misc.h"
