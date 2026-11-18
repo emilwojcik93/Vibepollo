@@ -980,7 +980,7 @@ namespace config {
 
     356,  // touch_posture_diagonal_mm (14 in; range 100-419)
     true,  // touch_tablet_mode
-    "tablet",  // handheld_mode (tablet | xbox_fullscreen | desktop)
+    "xbox_fullscreen",  // handheld_mode (tablet | xbox_fullscreen | desktop)
     0,  // max_bitrate
     20,  // minimum_fps_target (FPS; 0 uses the capture/encoder path fallback)
     true,  // wgc_pacing_smoothing
@@ -2088,7 +2088,7 @@ namespace config {
         if (posture::parse_handheld_policy(handheld_mode)) {
           video.handheld_mode = handheld_mode;
         } else {
-          video.handheld_mode = "tablet";
+          video.handheld_mode = "xbox_fullscreen";
           BOOST_LOG(warning) << "config: handheld_mode must be tablet, xbox_fullscreen or desktop, got ["sv << handheld_mode
                              << "]; using the default tablet"sv;
         }

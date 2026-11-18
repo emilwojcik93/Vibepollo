@@ -192,9 +192,9 @@ Which mode a client gets, from its state (`effective_class`):
 | `tablet`, `phone`, `clientTouch=1`, or a paired touch device | tablet |
 | `handheld` | set by `handheld_mode` (below) |
 
-- `handheld_mode` (host option): `tablet` (default) treats handheld clients like tablets, `xbox_fullscreen` makes them
-  handheld, `desktop` treats them like keyboard-attached desktops. The Xbox full screen experience must be enabled
-  on the host for `xbox_fullscreen`; otherwise the handheld client gets tablet mode.
+- `handheld_mode` (host option): `xbox_fullscreen` (default) makes handheld clients handheld, `tablet` treats them
+  like tablets, `desktop` treats them like keyboard-attached desktops. Where Windows cannot enter the Xbox full
+  screen experience (older build, no Xbox app) a handheld client gets tablet mode.
 - `posture_mode` (per paired client, set in the web UI as "Host mode for this device" or through
   `POST /api/clients/update`): `auto` (default) follows the client's own posture; `desktop`, `tablet` and
   `handheld` force that mode for the client. The override applies at launch/resume and to `/posture` updates.

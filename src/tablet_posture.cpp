@@ -175,7 +175,7 @@ namespace tablet_posture {
   }  // namespace
 
   posture::host_mode_e host_mode_for(const posture::hints_t &hints) {
-    const auto policy = posture::parse_handheld_policy(config::video.handheld_mode).value_or(posture::handheld_policy_e::tablet);
+    const auto policy = posture::parse_handheld_policy(config::video.handheld_mode).value_or(posture::handheld_policy_e::xbox_fullscreen);
     return posture::host_mode(hints, policy);
   }
 
