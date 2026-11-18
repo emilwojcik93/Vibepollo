@@ -288,6 +288,13 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
 #endif
 
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+  // The instance the host service starts as the logged-on user to switch the Xbox full screen
+  // experience. It only makes that one call: no configuration, no logging, no host initialization.
+  if (argc > 2 && argv[1] == tablet_posture::gaming_switch_arg) {
+    return tablet_posture::run_gaming_switch(argc, argv);
+  }
+#endif
 #ifdef __APPLE__
   // Helper that turns physical displays back on if the main process dies mid-stream.
   if (argc > 1 && argv[1] == platf::macos_virtual_display::restore_watchdog_arg) {

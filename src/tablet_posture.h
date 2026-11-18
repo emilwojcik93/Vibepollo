@@ -18,6 +18,7 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "posture_size.h"
@@ -67,6 +68,13 @@ namespace tablet_posture {
   };
 
   status_t status();
+
+  /// First argument of the instance a Windows host service starts as the logged-on user to switch the
+  /// gaming posture; followed by `enter` or `leave`. Handled before any host initialization.
+  inline constexpr std::string_view gaming_switch_arg = "--gaming-posture-switch";
+
+  /// Windows: make the switch `argv[2]` asks for and return 0 when the host is in the wanted state.
+  int run_gaming_switch(int argc, char **argv);
 
   /// At host start: undo whatever a previous host process left behind after a crash.
   void recover();

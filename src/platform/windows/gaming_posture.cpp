@@ -14,10 +14,14 @@
  * experience is not supported, has no home app, or does not change, the caller keeps the host in
  * tablet mode.
  *
- * Entering and leaving ask for confirmation. Windows remembers the answers under
- * GamingConfiguration\SystemDialogResults (user hive first, then the machine hive). The answers are
- * supplied in the machine hive only while the host switches and removed afterwards; a journal file
- * lets a restarted host remove them after a crash. A choice the user made is never touched.
+ * Windows refuses the switch (E_ACCESSDENIED) for a process that does not run as the logged-on user,
+ * also while such a process impersonates that user. A host service therefore starts this executable
+ * once more as the user, with gaming_switch_arg: that instance only calls the switch and exits.
+ *
+ * Entering and leaving ask for confirmation. Windows remembers the answers in the user's hive under
+ * GamingConfiguration\SystemDialogResults; the machine hive is not consulted. The answers are
+ * supplied there only while the host switches and removed afterwards; a journal file lets a
+ * restarted host remove them after a crash. A choice the user made is never touched.
  */
 // standard includes
 #include <algorithm>
@@ -107,6 +111,26 @@ namespace tablet_posture::backend {
       return out;
     }
 
+    /// The logged-on user's hive, or this process' own when the host already runs as that user. Close with close_user_hive().
+    HKEY open_user_hive() {
+      HKEY hive = nullptr;
+      if (const HANDLE token = platf::retrieve_users_token(false)) {
+        (void) platf::impersonate_current_user(token, [&]() {
+          if (RegOpenCurrentUser(KEY_READ | KEY_WRITE, &hive) != ERROR_SUCCESS) {
+            hive = nullptr;
+          }
+        });
+        CloseHandle(token);
+      }
+      return hive ? hive : HKEY_CURRENT_USER;
+    }
+
+    void close_user_hive(HKEY hive) {
+      if (hive != HKEY_CURRENT_USER) {
+        RegCloseKey(hive);
+      }
+    }
+
     /// Remove the confirmation answers this host supplied, as listed in the journal.
     void withdraw_answers() {
       std::error_code ec;
@@ -124,7 +148,8 @@ namespace tablet_posture::backend {
       }
       HKEY key = nullptr;
       bool clean = true;
-      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, dialog_results_key, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
+      const HKEY hive = open_user_hive();
+      if (RegOpenKeyExW(hive, dialog_results_key, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
         for (const auto &dialog : dialog_answers) {
           if (std::find(supplied.begin(), supplied.end(), narrow(dialog.name)) == supplied.end()) {
             continue;
@@ -134,6 +159,7 @@ namespace tablet_posture::backend {
         }
         RegCloseKey(key);
       }
+      close_user_hive(hive);
       if (clean) {
         std::filesystem::remove(journal_path(), ec);
       } else {
@@ -141,16 +167,19 @@ namespace tablet_posture::backend {
       }
     }
 
-    /// Answer the switch confirmations in the machine hive where no answer exists yet, journaling each one first.
+    /// Answer the switch confirmations in the user's hive where no answer exists yet, journaling each one first.
     void supply_answers() {
       HKEY key = nullptr;
-      if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, dialog_results_key, 0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+      const HKEY hive = open_user_hive();
+      const auto status = RegCreateKeyExW(hive, dialog_results_key, 0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
+      close_user_hive(hive);
+      if (status != ERROR_SUCCESS) {
         BOOST_LOG(warning) << "Gaming posture: could not open the confirmation answers; Windows may ask before switching"sv;
         return;
       }
       for (const auto &dialog : dialog_answers) {
         if (RegQueryValueExW(key, dialog.name, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
-          continue;  // Already answered, by the administrator or by an earlier switch of ours.
+          continue;  // Already answered, by the user or by an earlier switch of ours.
         }
         std::ofstream(journal_path(), std::ios::app) << narrow(dialog.name) << '\n';
         RegSetValueExW(key, dialog.name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&dialog.answer), sizeof(dialog.answer));
@@ -168,6 +197,37 @@ namespace tablet_posture::backend {
         std::this_thread::sleep_for(switch_poll);
       }
       return (api.active() != FALSE) == wanted;
+    }
+
+    /// Ask Windows for the switch from this process. The call does not return while Windows shows a
+    /// confirmation, so it runs on its own thread; callers bound it with wait_for_active().
+    void request_switch(bool enter) {
+      std::thread([set = gaming_api().set, enter] {
+        set(enter ? TRUE : FALSE);
+      }).detach();
+    }
+
+    /// Start this executable as the logged-on user to make the switch there.
+    bool request_switch_as_user(bool enter) {
+      wchar_t executable[MAX_PATH] = {};
+      const DWORD length = GetModuleFileNameW(nullptr, executable, ARRAYSIZE(executable));
+      if (length == 0 || length >= ARRAYSIZE(executable)) {
+        return false;
+      }
+      std::string cmd = "\"" + platf::to_utf8(executable) + "\" ";
+      cmd += tablet_posture::gaming_switch_arg;
+      cmd += enter ? " enter" : " leave";
+
+      platf::bp::environment env = platf::bp::this_process::env();
+      auto working_dir = boost::filesystem::path();
+      std::error_code ec;
+      auto child = platf::run_command(false, false, cmd, working_dir, env, nullptr, ec, nullptr);
+      if (ec) {
+        BOOST_LOG(warning) << "Gaming posture: could not start the switch as the logged-on user: "sv << ec.message();
+        return false;
+      }
+      child.detach();
+      return true;
     }
 
     /// Press Win+F11 on the input desktop, the shortcut Windows documents for this switch.
@@ -207,11 +267,10 @@ namespace tablet_posture::backend {
 
     bool switched = false;
     if (api.set && api.can_set && api.can_set() != FALSE) {
-      // Windows grants the switch once a home app is chosen. The call does not return while Windows
-      // shows a confirmation, so it runs on its own thread and the wait below bounds it.
-      std::thread([set = api.set, enter] {
-        set(enter ? TRUE : FALSE);
-      }).detach();
+      // This host runs as the logged-on user and that user has a home app.
+      request_switch(enter);
+      switched = wait_for_active(enter);
+    } else if (api.set && request_switch_as_user(enter)) {
       switched = wait_for_active(enter);
     }
     if (!switched) {
@@ -243,3 +302,26 @@ namespace tablet_posture::backend {
     withdraw_answers();
   }
 }  // namespace tablet_posture::backend
+
+namespace tablet_posture {
+  int run_gaming_switch(int argc, char **argv) {
+    using namespace backend;
+    const std::string_view verb = argc > 2 ? argv[2] : "";
+    if (verb != "enter"sv && verb != "leave"sv) {
+      return 2;
+    }
+    const bool enter = verb == "enter"sv;
+    const auto &api = gaming_api();
+    if (!api.supported || !api.active || !api.set || api.supported() == FALSE) {
+      return 3;
+    }
+    if ((api.active() != FALSE) == enter) {
+      return 0;
+    }
+    if (!api.can_set || api.can_set() == FALSE) {
+      return 4;  // No home app chosen for this user.
+    }
+    request_switch(enter);
+    return wait_for_active(enter) ? 0 : 1;
+  }
+}  // namespace tablet_posture
