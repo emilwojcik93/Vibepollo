@@ -4,18 +4,17 @@
  *
  * Windows calls the Xbox full screen experience ("Xbox mode") its gaming posture. The shell's
  * GamingPostureController enters and leaves it, and gamemode.dll exposes the state through
- * IsGamingFullScreenExperienceSupported/Active and a switch, SetGamingFullScreenExperience. The switch
- * is refused for everyone but the configured gaming home app, the Game Bar and shell components
- * (IGamingPostureBroker::CanSetGamingPosture compares the caller's package identity and otherwise
- * asks for the shellExperience capability), so a host service gets E_ACCESSDENIED from it.
+ * IsGamingFullScreenExperienceSupported/Active and a switch, SetGamingFullScreenExperience, with
+ * CanSetGamingFullScreenExperience telling whether the switch is available. It is once the user has a
+ * home app (Settings > Gaming > Xbox mode, normally the Xbox app); without one nothing can enter.
  *
- * What Windows offers every user is the Win+F11 shortcut, handled by the same controller. This
- * backend therefore never toggles blindly: it reads the state, uses the switch when Windows allows
- * it, otherwise presses the shortcut only when the state differs, and then confirms the new state.
- * When the experience is not supported, has no home app, or does not change, the caller keeps the
- * host in tablet mode.
+ * Windows also offers every user the Win+F11 shortcut, handled by the same controller. This backend
+ * never toggles blindly: it reads the state, uses the switch when Windows allows it, otherwise
+ * presses the shortcut only when the state differs, and then confirms the new state. When the
+ * experience is not supported, has no home app, or does not change, the caller keeps the host in
+ * tablet mode.
  *
- * Entering and leaving ask for confirmation once. Windows remembers the answers under
+ * Entering and leaving ask for confirmation. Windows remembers the answers under
  * GamingConfiguration\SystemDialogResults (user hive first, then the machine hive). The answers are
  * supplied in the machine hive only while the host switches and removed afterwards; a journal file
  * lets a restarted host remove them after a crash. A choice the user made is never touched.
@@ -52,14 +51,21 @@ namespace tablet_posture::backend {
   namespace {
     constexpr auto dialog_results_key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\GamingConfiguration\\SystemDialogResults";
 
-    /// The confirmations Windows shows around a switch on a PC that is not itself a handheld.
-    constexpr std::array<const wchar_t *, 3> dialog_names {
-      L"EnterGamingPostureConfirmation_NoReboot",
-      L"PostEntryGamingPostureConfirmation",
-      L"ExitGamingPostureConfirmation_Minimal",
+    struct dialog_answer_t {
+      const wchar_t *name;
+      DWORD answer;
     };
 
-    constexpr DWORD dialog_accepted = 1;
+    /// The confirmations Windows shows around a switch, each with the answer that switches at once.
+    /// Which of them appear depends on the device form Windows believes it runs on.
+    constexpr std::array<dialog_answer_t, 5> dialog_answers {{
+      {L"EnterGamingPostureConfirmation_NoReboot", 1},
+      // Handheld device form: "Enter at startup", "Start now", "Stay on desktop". 2 is "Start now" (build 26300).
+      {L"EnterGamingPostureConfirmation_Config", 2},
+      {L"PostEntryGamingPostureConfirmation", 1},
+      {L"ExitGamingPostureConfirmation_Minimal", 1},
+      {L"ExitGamingPostureConfirmation", 1},
+    }};
 
     constexpr auto switch_timeout = 8s;
     constexpr auto switch_poll = 100ms;
@@ -119,11 +125,11 @@ namespace tablet_posture::backend {
       HKEY key = nullptr;
       bool clean = true;
       if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, dialog_results_key, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
-        for (const auto name : dialog_names) {
-          if (std::find(supplied.begin(), supplied.end(), narrow(name)) == supplied.end()) {
+        for (const auto &dialog : dialog_answers) {
+          if (std::find(supplied.begin(), supplied.end(), narrow(dialog.name)) == supplied.end()) {
             continue;
           }
-          const auto status = RegDeleteValueW(key, name);
+          const auto status = RegDeleteValueW(key, dialog.name);
           clean = clean && (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
         }
         RegCloseKey(key);
@@ -142,12 +148,12 @@ namespace tablet_posture::backend {
         BOOST_LOG(warning) << "Gaming posture: could not open the confirmation answers; Windows may ask before switching"sv;
         return;
       }
-      for (const auto name : dialog_names) {
-        if (RegQueryValueExW(key, name, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+      for (const auto &dialog : dialog_answers) {
+        if (RegQueryValueExW(key, dialog.name, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
           continue;  // Already answered, by the administrator or by an earlier switch of ours.
         }
-        std::ofstream(journal_path(), std::ios::app) << narrow(name) << '\n';
-        RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&dialog_accepted), sizeof(dialog_accepted));
+        std::ofstream(journal_path(), std::ios::app) << narrow(dialog.name) << '\n';
+        RegSetValueExW(key, dialog.name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&dialog.answer), sizeof(dialog.answer));
       }
       RegCloseKey(key);
     }
@@ -201,8 +207,12 @@ namespace tablet_posture::backend {
 
     bool switched = false;
     if (api.set && api.can_set && api.can_set() != FALSE) {
-      // Reserved by Windows for its gaming home app and shell components; used when it is granted.
-      switched = SUCCEEDED(api.set(enter ? TRUE : FALSE)) && wait_for_active(enter);
+      // Windows grants the switch once a home app is chosen. The call does not return while Windows
+      // shows a confirmation, so it runs on its own thread and the wait below bounds it.
+      std::thread([set = api.set, enter] {
+        set(enter ? TRUE : FALSE);
+      }).detach();
+      switched = wait_for_active(enter);
     }
     if (!switched) {
       if (!press_shortcut()) {
@@ -213,7 +223,8 @@ namespace tablet_posture::backend {
 
     if (!switched && enter) {
       BOOST_LOG(warning) << "Gaming posture: Windows did not enter the Xbox full screen experience. "
-                            "Check that the Xbox app is installed and Xbox mode is available on this host."sv;
+                            "Check that the Xbox app is installed and chosen as the home app under "
+                            "Settings > Gaming > Xbox mode, and that no confirmation is waiting on the host screen."sv;
     }
     if (!enter || !switched) {
       // Nothing more to confirm once the host is back on the desktop, or when it never left it.
