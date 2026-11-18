@@ -108,17 +108,18 @@ TEST(TabletPosturePolicy, ClientsReportEveryActiveSession) {
   registry.start("convertible", desktop);
   const auto clients = registry.clients();
   ASSERT_EQ(clients.size(), 2u);
-  EXPECT_EQ(clients[0].id, "phone");
-  EXPECT_EQ(clients[0].sessions, 2);
-  EXPECT_EQ(clients[0].mode, tablet);
-  EXPECT_EQ(clients[1].id, "convertible");
-  EXPECT_EQ(clients[1].mode, desktop);
+  // Ordered by client id.
+  EXPECT_EQ(clients[0].id, "convertible");
+  EXPECT_EQ(clients[0].mode, desktop);
+  EXPECT_EQ(clients[1].id, "phone");
+  EXPECT_EQ(clients[1].sessions, 2);
+  EXPECT_EQ(clients[1].mode, tablet);
 }
 
 TEST(TabletPosturePolicy, HandheldClientMakesASlateAndWantsGaming) {
   registry_t registry;
   EXPECT_FALSE(registry.gaming());
-  EXPECT_TRUE(registry.start("ally", handheld));
+  EXPECT_TRUE(registry.start("handheld", handheld));
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_EQ(registry.mode(), handheld);
   EXPECT_TRUE(registry.gaming());
@@ -134,7 +135,7 @@ TEST(TabletPosturePolicy, TabletClientDoesNotWantGaming) {
 TEST(TabletPosturePolicy, StrongestClientModeWins) {
   registry_t registry;
   registry.start("phone", tablet);
-  registry.start("ally", handheld);
+  registry.start("handheld", handheld);
   EXPECT_EQ(registry.mode(), handheld);
   EXPECT_TRUE(registry.gaming());
 }
@@ -142,8 +143,8 @@ TEST(TabletPosturePolicy, StrongestClientModeWins) {
 TEST(TabletPosturePolicy, HandheldLeavingKeepsSlateWithoutGaming) {
   registry_t registry;
   registry.start("phone", tablet);
-  registry.start("ally", handheld);
-  EXPECT_TRUE(registry.stop("ally"));
+  registry.start("handheld", handheld);
+  EXPECT_TRUE(registry.stop("handheld"));
   EXPECT_EQ(registry.state(), state_e::slate);
   EXPECT_FALSE(registry.gaming());
   EXPECT_EQ(registry.mode(), tablet);
@@ -162,7 +163,7 @@ TEST(TabletPosturePolicy, OverrideHandheldWorksWithoutAnyClient) {
 
 TEST(TabletPosturePolicy, OverrideDesktopBeatsAStreamingHandheld) {
   registry_t registry;
-  registry.start("ally", handheld);
+  registry.start("handheld", handheld);
   registry.set_override(desktop);
   EXPECT_EQ(registry.state(), state_e::laptop);
   EXPECT_FALSE(registry.gaming());
