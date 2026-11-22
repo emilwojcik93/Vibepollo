@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: emilwojcik93 <adminit@adar.pl>
+Date: Sun, 22 Nov 2026 10:09:00 +0100
+Subject: [PATCH] tools: drop a stray blank line in CMakeLists.txt
+
+The posture branch carries a one-line whitespace-only deletion in
+tools/CMakeLists.txt (the blank line before the display helper comment). It is
+cosmetic and unrelated to posture. It is kept as a separate last patch only so
+that the series reproduces the reference tree byte for byte; drop it, together
+with its line in patches/series, once the reference branch no longer has it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ tools/CMakeLists.txt | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
+index 61aff9395..e8aca82b7 100644
+--- a/tools/CMakeLists.txt
++++ b/tools/CMakeLists.txt
+@@ -119,7 +119,6 @@ add_executable(sunshine_end_stream_hotkey end_stream_hotkey.cpp)
+ target_link_libraries(sunshine_end_stream_hotkey PRIVATE user32 wtsapi32)
+ target_compile_definitions(sunshine_end_stream_hotkey PRIVATE _WIN32_WINNT=0x0602)
+ target_compile_options(sunshine_end_stream_hotkey PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+-
+ # Display settings helper: detached helper that applies/reverts display settings via IPC.
+ # One exe hosts both engines (legacy + v2), selected by --engine= or persisted state.
+ add_executable(sunshine_display_helper

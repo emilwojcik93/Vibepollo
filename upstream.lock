@@ -1,0 +1,16 @@
+# upstream.lock - written by tools/update-lock.sh. Do not edit by hand.
+# A tag that later resolves to a different commit than recorded here must halt the pipeline.
+upstream:
+  repository: Nonary/Vibepollo
+  owner: Nonary
+  tag: 2.20.0
+  commit: 2b0608e244d9e4c83d17c37338184a08c2c620f8
+  tag_object: 38c68221b4a2d4bed803d5569909798b1f470e87
+  commit_date: 2026-11-21T19:29:39-06:00
+  release_id: null   # filled in by the upstream-watch workflow (Phase 2)
+patch_series:
+  count: 9
+  sha256: fd06dfd007ce8e0b800e3d72df2f5f8a600d7a705675f63ed31527e81b003753   # sha256 of patches/series followed by every patch in order (tools/series-sha.sh)
+  result_tree: 9132c484c39db62a4a1c89d53ee76f3b9825c116         # tree of <tag> + series; must equal the reference tree
+  reference: 1591d2c95
+locked_on: 2026-11-22

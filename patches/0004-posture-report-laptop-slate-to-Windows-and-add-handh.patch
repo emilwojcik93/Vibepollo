@@ -1,0 +1,1735 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: emilwojcik93 <adminit@adar.pl>
+Date: Sun, 22 Nov 2026 10:04:00 +0100
+Subject: [PATCH] posture: report laptop/slate to Windows and add handheld full
+ screen mode
+
+A reported small monitor docks the touch keyboard, but Windows only switches
+to tablet behaviour (touch keyboard on text focus, tablet taskbar) when it
+believes the machine is a convertible with the keyboard folded back or
+detached. A virtual display host is neither, so while a touch-primary client
+streams the host reports the state itself through the Windows laptop/slate
+indicator interface, and reports laptop again a few seconds after the last
+touch client left (so a resume does not flicker the shell).
+
+- src/tablet_posture.*, tablet_posture_policy.h: client registry, state
+  machine and worker thread; all Windows work runs off the streaming and HTTP
+  threads; crash recovery at start, restore at shutdown;
+- src/platform/windows/tablet_posture.cpp: the ROOT\HIDCLASS indicator device;
+- handheld mode: a handheld client also asks for the Xbox full screen
+  experience (gaming posture) via src/platform/windows/gaming_posture.cpp,
+  switched by a short-lived helper instance of the host started as the
+  logged-on user (--gaming-posture-switch, handled first in main());
+- stream session start/end register and release the client, main() runs
+  recovery and shutdown;
+- /api/tablet-posture (GET status, POST simulate slate/laptop/handheld/auto);
+- installer: the MSI removes only the indicator node it created on uninstall.
+
+The Xbox full screen part is inseparable from the registry in the same files,
+so both live in this patch. Unit tests cover the pure policy.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cmake/compile_definitions/common.cmake        |   3 +
+ cmake/compile_definitions/windows.cmake       |   2 +
+ cmake/packaging/windows.cmake                 |   5 +
+ packaging/windows/wix/custom_actions.wxs      |   6 +
+ .../windows/wix/patch_custom_actions.wxs      |   4 +-
+ src/confighttp.cpp                            |  86 +++++
+ src/main.cpp                                  |  10 +
+ src/platform/windows/gaming_posture.cpp       | 328 ++++++++++++++++++
+ src/platform/windows/tablet_posture.cpp       | 316 +++++++++++++++++
+ src/stream.cpp                                |  15 +
+ src/tablet_posture.cpp                        | 259 ++++++++++++++
+ src/tablet_posture.h                          |  93 +++++
+ src/tablet_posture_policy.h                   | 143 ++++++++
+ .../drivers/tablet-posture/cleanup.ps1        |  27 ++
+ tests/CMakeLists.txt                          |   1 +
+ tests/unit/test_tablet_posture_policy.cpp     | 173 +++++++++
+ 16 files changed, 1470 insertions(+), 1 deletion(-)
+ create mode 100644 src/platform/windows/gaming_posture.cpp
+ create mode 100644 src/platform/windows/tablet_posture.cpp
+ create mode 100644 src/tablet_posture.cpp
+ create mode 100644 src/tablet_posture.h
+ create mode 100644 src/tablet_posture_policy.h
+ create mode 100644 src_assets/windows/drivers/tablet-posture/cleanup.ps1
+ create mode 100644 tests/unit/test_tablet_posture_policy.cpp
+
+diff --git a/cmake/compile_definitions/common.cmake b/cmake/compile_definitions/common.cmake
+index c5b19798b..54b643c38 100644
+--- a/cmake/compile_definitions/common.cmake
++++ b/cmake/compile_definitions/common.cmake
+@@ -120,6 +120,9 @@ set(SUNSHINE_TARGET_FILES
+         "${CMAKE_SOURCE_DIR}/src/posture_size.h"
+         "${CMAKE_SOURCE_DIR}/src/posture_state.cpp"
+         "${CMAKE_SOURCE_DIR}/src/posture_state.h"
++        "${CMAKE_SOURCE_DIR}/src/tablet_posture.cpp"
++        "${CMAKE_SOURCE_DIR}/src/tablet_posture.h"
++        "${CMAKE_SOURCE_DIR}/src/tablet_posture_policy.h"
+         "${CMAKE_SOURCE_DIR}/src/httpcommon.cpp"
+         "${CMAKE_SOURCE_DIR}/src/http_policy.cpp"
+         "${CMAKE_SOURCE_DIR}/src/httpcommon.h"
+diff --git a/cmake/compile_definitions/windows.cmake b/cmake/compile_definitions/windows.cmake
+index 3b0216aa9..7f83be807 100644
+--- a/cmake/compile_definitions/windows.cmake
++++ b/cmake/compile_definitions/windows.cmake
+@@ -185,6 +185,8 @@ set(PLATFORM_TARGET_FILES
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/publish.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.h"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/misc.cpp"
++        "${CMAKE_SOURCE_DIR}/src/platform/windows/tablet_posture.cpp"
++        "${CMAKE_SOURCE_DIR}/src/platform/windows/gaming_posture.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/host_stats.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.h"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/pipes.cpp"
+diff --git a/cmake/packaging/windows.cmake b/cmake/packaging/windows.cmake
+index c115a38dc..8b30dd80a 100644
+--- a/cmake/packaging/windows.cmake
++++ b/cmake/packaging/windows.cmake
+@@ -291,6 +291,11 @@ install(FILES "${SUNSHINE_VIRTUAL_GAMEPAD_ROOT_CLEANUP_SCRIPT}"
+         DESTINATION "${SUNSHINE_VHF_GAMEPAD_DRIVER_DESTINATION}"
+         COMPONENT assets)
+ 
++# Removes the laptop/slate indicator node the host creates for tablet posture (src/tablet_posture.h).
++install(FILES "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/tablet-posture/cleanup.ps1"
++        DESTINATION "drivers/tablet-posture"
++        COMPONENT assets)
++
+ set(SUNSHINE_VHF_GAMEPAD_WIX_BUNDLED 0)
+ set(SUNSHINE_VHF_GAMEPAD_WIX_ALLOW_LOCAL_TEST 0)
+ set(SUNSHINE_LIBVIRTUALGAMEPAD_PREBUILT_DIR "" CACHE PATH
+diff --git a/packaging/windows/wix/custom_actions.wxs b/packaging/windows/wix/custom_actions.wxs
+index a78404e2d..1ca600693 100644
+--- a/packaging/windows/wix/custom_actions.wxs
++++ b/packaging/windows/wix/custom_actions.wxs
+@@ -182,6 +182,7 @@
+     <CustomAction Id="UninstallSudovda" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+     <CustomAction Id="UninstallVirtualDisplayDriver" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+     <CustomAction Id="RemoveVirtualGamepadRoot" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
++    <CustomAction Id="RemoveTabletPostureIndicator" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+     <CustomAction Id="UnregisterVulkanHdrLayer" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Return="ignore" Impersonate="no" />
+     <CustomAction Id="FactoryResetAppData" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+     <CustomAction Id="CleanupEmptyInstallRoot" BinaryKey="WixCA" DllEntry="WixQuietExec" Execute="deferred" Return="ignore" Impersonate="no" />
+@@ -249,6 +250,11 @@
+                  Property="RemoveVirtualGamepadRoot"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\vhf-gamepad\cleanup.ps1&quot; -InstallerBestEffort -RemoveDriverStorePackage:[REMOVEVIRTUALGAMEPADDRIVER]"/>
+ 
++    <!-- Removes only the ROOT\HIDCLASS laptop/slate indicator node the host creates for tablet posture. -->
++    <CustomAction Id="SetRemoveTabletPostureIndicator"
++                 Property="RemoveTabletPostureIndicator"
++                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\tablet-posture\cleanup.ps1&quot; -InstallerBestEffort"/>
++
+     <CustomAction Id="SetUnregisterVulkanHdrLayer"
+                  Property="UnregisterVulkanHdrLayer"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoLogo -NonInteractive -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALL_ROOT]drivers\sunshine\install.ps1&quot; -UnregisterVulkanLayerOnly"/>
+diff --git a/packaging/windows/wix/patch_custom_actions.wxs b/packaging/windows/wix/patch_custom_actions.wxs
+index 404c2131d..3b84b044f 100644
+--- a/packaging/windows/wix/patch_custom_actions.wxs
++++ b/packaging/windows/wix/patch_custom_actions.wxs
+@@ -118,9 +118,11 @@
+            opt-in, so the checkbox remains meaningful across package versions. -->
+       <Custom Action="SetRemoveVirtualGamepadRoot" After="UninstallVirtualDisplayDriver">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+       <Custom Action="RemoveVirtualGamepadRoot" After="SetRemoveVirtualGamepadRoot">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
++      <Custom Action="SetRemoveTabletPostureIndicator" After="RemoveVirtualGamepadRoot">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
++      <Custom Action="RemoveTabletPostureIndicator" After="SetRemoveTabletPostureIndicator">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+ 
+       <!-- Factory reset only removes known Vibepollo app data. MSI-owned files are removed by MSI itself. -->
+-      <Custom Action="SetFactoryResetAppData" After="RemoveVirtualGamepadRoot">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND (FACTORYRESET = "1" OR DELETEINSTALLDIR = "1")</Custom>
++      <Custom Action="SetFactoryResetAppData" After="RemoveTabletPostureIndicator">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND (FACTORYRESET = "1" OR DELETEINSTALLDIR = "1")</Custom>
+       <Custom Action="FactoryResetAppData" After="SetFactoryResetAppData">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE AND (FACTORYRESET = "1" OR DELETEINSTALLDIR = "1")</Custom>
+ 
+       <!-- After MSI has removed its tracked files, remove the install root only if it is empty. -->
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+index dde7ccb15..388289b52 100644
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -74,6 +74,7 @@
+ #include "remote_monitor_profile_policy.h"
+ #include "platform/common.h"
+ #include "rtsp.h"
++#include "tablet_posture.h"
+ #include "session_history.h"
+ #include "stream.h"
+ #include "host_stats.h"
+@@ -2782,6 +2783,89 @@ namespace confighttp {
+     send_response(response, output_tree, "no-store");
+   }
+ 
++  /**
++   * @brief Windows laptop/slate (tablet) state the host reports, with the clients behind it.
++   *
++   * @api_examples{/api/tablet-posture| GET| null}
++   */
++  void getTabletPosture(resp_https_t response, req_https_t request) {
++    if (!authenticate(response, request)) {
++      return;
++    }
++
++    print_req(request);
++
++    const auto name = [](tablet_posture::state_e state) {
++      return state == tablet_posture::state_e::slate ? "slate" : "laptop";
++    };
++    const auto mode_name = [](tablet_posture::client_mode_e mode) {
++      switch (mode) {
++        case tablet_posture::client_mode_e::tablet:
++          return "tablet";
++        case tablet_posture::client_mode_e::handheld:
++          return "handheld";
++        case tablet_posture::client_mode_e::desktop:
++          break;
++      }
++      return "desktop";
++    };
++    const auto status = tablet_posture::status();
++    nlohmann::json output_tree;
++    output_tree["enabled"] = status.enabled;
++    output_tree["applied"] = name(status.applied);
++    output_tree["wanted"] = name(status.wanted);
++    output_tree["mode"] = mode_name(status.wanted_mode);
++    output_tree["gaming"] = status.gaming_applied;
++    output_tree["override"] = status.override_state ? nlohmann::json(name(*status.override_state)) : nlohmann::json(nullptr);
++    output_tree["clients"] = nlohmann::json::array();
++    for (const auto &client : status.clients) {
++      output_tree["clients"].push_back({{"id", client.id}, {"sessions", client.sessions}, {"touch_primary", client.mode != tablet_posture::client_mode_e::desktop}, {"mode", mode_name(client.mode)}});
++    }
++    output_tree["status"] = true;
++    send_response(response, output_tree, "no-store");
++  }
++
++  /**
++   * @brief Simulate the keyboard being detached (`slate` or `tablet`) or attached (`laptop`), force the handheld mode (`handheld`), or give control back to the clients (`auto`).
++   *
++   * @api_examples{/api/tablet-posture| POST| {"mode": "slate"}}
++   */
++  void postTabletPosture(resp_https_t response, req_https_t request) {
++    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
++      return;
++    }
++
++    print_req(request);
++
++    try {
++      std::stringstream ss;
++      ss << request->content.rdbuf();
++      const auto input_tree = nlohmann::json::parse(ss.str());
++      if (!input_tree.contains("mode") || !input_tree["mode"].is_string()) {
++        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
++        return;
++      }
++      const auto mode = input_tree["mode"].get<std::string>();
++      if (mode == "slate") {
++        tablet_posture::set_override(tablet_posture::client_mode_e::tablet);
++      } else if (mode == "laptop") {
++        tablet_posture::set_override(tablet_posture::client_mode_e::desktop);
++      } else if (mode == "handheld") {
++        tablet_posture::set_override(tablet_posture::client_mode_e::handheld);
++      } else if (mode == "auto") {
++        tablet_posture::set_override(std::nullopt);
++      } else {
++        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
++        return;
++      }
++      nlohmann::json output_tree;
++      output_tree["status"] = true;
++      send_response(response, output_tree);
++    } catch (const std::exception &e) {
++      bad_request(response, request, e.what());
++    }
++  }
++
+   void refresh_remote_display_physical_baseline() {
+     try {
+ #ifdef _WIN32
+@@ -6564,6 +6648,8 @@ namespace confighttp {
+     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
+     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
+     register_api_route("^/api/clients/list$", "GET", getClients);
++    register_api_route("^/api/tablet-posture$", "GET", getTabletPosture);
++    register_api_route("^/api/tablet-posture$", "POST", postTabletPosture);
+     register_blocking_api_route("^/api/clients/display-layout$", "GET", getClientDisplayLayout);
+     register_blocking_api_route("^/api/clients/display-layout$", "PUT", putClientDisplayLayout);
+     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);
+diff --git a/src/main.cpp b/src/main.cpp
+index 36b2007bb..c4def686f 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -31,6 +31,7 @@
+ #include "nvhttp.h"
+ #include "pairing_recovery.h"
+ #include "process.h"
++#include "tablet_posture.h"
+ #include "pyrowave_host.h"
+ #include "rtsp.h"
+ #include "stream.h"
+@@ -287,6 +288,13 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
+ #endif
+ 
+ int main(int argc, char *argv[]) {
++#ifdef _WIN32
++  // The instance the host service starts as the logged-on user to switch the Xbox full screen
++  // experience. It only makes that one call: no configuration, no logging, no host initialization.
++  if (argc > 2 && argv[1] == tablet_posture::gaming_switch_arg) {
++    return tablet_posture::run_gaming_switch(argc, argv);
++  }
++#endif
+ #ifdef __APPLE__
+   // Helper that turns physical displays back on if the main process dies mid-stream.
+   if (argc > 1 && argv[1] == platf::macos_virtual_display::restore_watchdog_arg) {
+@@ -796,6 +804,8 @@ int main(int argc, char *argv[]) {
+   // This allows access to the UI to fix configuration problems or view the logs.
+ 
+   auto platf_deinit_guard = platf::init();
++  tablet_posture::recover();
++  auto tablet_posture_guard = util::fail_guard(tablet_posture::shutdown);
+   if (!platf_deinit_guard) {
+     BOOST_LOG(error) << "Platform failed to initialize"sv;
+   }
+diff --git a/src/platform/windows/gaming_posture.cpp b/src/platform/windows/gaming_posture.cpp
+new file mode 100644
+index 000000000..7e7ffc049
+--- /dev/null
++++ b/src/platform/windows/gaming_posture.cpp
+@@ -0,0 +1,328 @@
++/**
++ * @file src/platform/windows/gaming_posture.cpp
++ * @brief Windows backend for the gaming posture, the Xbox full screen experience (see src/tablet_posture.h).
++ *
++ * Windows calls the Xbox full screen experience ("Xbox mode") its gaming posture. The shell's
++ * GamingPostureController enters and leaves it, and gamemode.dll exposes the state through
++ * IsGamingFullScreenExperienceSupported/Active and a switch, SetGamingFullScreenExperience, with
++ * CanSetGamingFullScreenExperience telling whether the switch is available. It is once the user has a
++ * home app (Settings > Gaming > Xbox mode, normally the Xbox app); without one nothing can enter.
++ *
++ * Windows refuses the switch (E_ACCESSDENIED) for a process that does not run as the logged-on user,
++ * also while such a process impersonates that user, and reports the experience as inactive to it. A
++ * host service therefore starts this executable once more as the user, with gaming_switch_arg: that
++ * instance reads the state, switches only when it differs, confirms the new state and reports it as
++ * its exit code. There is no blind toggle (the Win+F11 shortcut is not used). When the experience is
++ * not supported, has no home app, or does not change, the caller keeps the host in tablet mode.
++ *
++ * Entering and leaving ask for confirmation. Windows remembers the answers in the user's hive under
++ * GamingConfiguration\SystemDialogResults; the machine hive is not consulted. The answers are
++ * supplied there only while the host switches and removed afterwards; a journal file lets a
++ * restarted host remove them after a crash. A choice the user made is never touched.
++ */
++// standard includes
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <thread>
++#include <vector>
++
++// platform includes
++#include <winsock2.h>
++#include <windows.h>
++
++// local includes
++#include "misc.h"
++#include "src/logging.h"
++#include "src/platform/common.h"
++#include "src/tablet_posture.h"
++
++using namespace std::literals;
++
++namespace tablet_posture::backend {
++  gaming_result_e apply_gaming(bool enter);
++
++  bool recover_gaming();
++}  // namespace tablet_posture::backend
++
++namespace tablet_posture::backend {
++  namespace {
++    constexpr auto dialog_results_key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\GamingConfiguration\\SystemDialogResults";
++
++    struct dialog_answer_t {
++      const wchar_t *name;
++      DWORD answer;
++    };
++
++    /// The confirmations Windows shows around a switch, each with the answer that switches at once.
++    /// Which of them appear depends on the device form Windows believes it runs on.
++    constexpr std::array<dialog_answer_t, 5> dialog_answers {{
++      {L"EnterGamingPostureConfirmation_NoReboot", 1},
++      // Handheld device form: "Enter at startup", "Start now", "Stay on desktop". 2 is "Start now" (build 26300).
++      {L"EnterGamingPostureConfirmation_Config", 2},
++      {L"PostEntryGamingPostureConfirmation", 1},
++      {L"ExitGamingPostureConfirmation_Minimal", 1},
++      {L"ExitGamingPostureConfirmation", 1},
++    }};
++
++    constexpr auto switch_timeout = 8s;
++    constexpr auto switch_poll = 100ms;
++
++    using state_fn_t = BOOL(WINAPI *)();
++    using switch_fn_t = HRESULT(WINAPI *)(BOOL);
++
++    struct gaming_api_t {
++      state_fn_t supported = nullptr;
++      state_fn_t active = nullptr;
++      state_fn_t can_set = nullptr;
++      switch_fn_t set = nullptr;
++    };
++
++    /// The gaming experience API set is missing on older Windows, so it is bound at run time.
++    const gaming_api_t &gaming_api() {
++      static const gaming_api_t api = [] {
++        gaming_api_t loaded;
++        if (const auto module = LoadLibraryW(L"api-ms-win-gaming-experience-l1-1-0.dll")) {
++          loaded.supported = reinterpret_cast<state_fn_t>(reinterpret_cast<void *>(GetProcAddress(module, "IsGamingFullScreenExperienceSupported")));
++          loaded.active = reinterpret_cast<state_fn_t>(reinterpret_cast<void *>(GetProcAddress(module, "IsGamingFullScreenExperienceActive")));
++          loaded.can_set = reinterpret_cast<state_fn_t>(reinterpret_cast<void *>(GetProcAddress(module, "CanSetGamingFullScreenExperience")));
++          loaded.set = reinterpret_cast<switch_fn_t>(reinterpret_cast<void *>(GetProcAddress(module, "SetGamingFullScreenExperience")));
++        }
++        return loaded;
++      }();
++      return api;
++    }
++
++    std::filesystem::path journal_path() {
++      return platf::appdata() / "gaming_posture.journal";
++    }
++
++    /// Exists while the host is in a gaming posture it entered itself, so that a later host process can leave it.
++    std::filesystem::path entered_path() {
++      return platf::appdata() / "gaming_posture.entered";
++    }
++
++    std::string narrow(const wchar_t *text) {
++      std::string out;
++      for (; *text; ++text) {
++        out.push_back(static_cast<char>(*text));
++      }
++      return out;
++    }
++
++    /// The logged-on user's hive, or this process' own when the host already runs as that user. Close with close_user_hive().
++    HKEY open_user_hive() {
++      HKEY hive = nullptr;
++      if (const HANDLE token = platf::retrieve_users_token(false)) {
++        (void) platf::impersonate_current_user(token, [&]() {
++          if (RegOpenCurrentUser(KEY_READ | KEY_WRITE, &hive) != ERROR_SUCCESS) {
++            hive = nullptr;
++          }
++        });
++        CloseHandle(token);
++      }
++      return hive ? hive : HKEY_CURRENT_USER;
++    }
++
++    void close_user_hive(HKEY hive) {
++      if (hive != HKEY_CURRENT_USER) {
++        RegCloseKey(hive);
++      }
++    }
++
++    /// Remove the confirmation answers this host supplied, as listed in the journal.
++    void withdraw_answers() {
++      std::error_code ec;
++      if (!std::filesystem::exists(journal_path(), ec)) {
++        return;
++      }
++      std::vector<std::string> supplied;
++      {
++        std::ifstream in(journal_path());
++        for (std::string line; std::getline(in, line);) {
++          if (!line.empty()) {
++            supplied.push_back(line);
++          }
++        }
++      }
++      HKEY key = nullptr;
++      bool clean = true;
++      const HKEY hive = open_user_hive();
++      if (RegOpenKeyExW(hive, dialog_results_key, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS) {
++        for (const auto &dialog : dialog_answers) {
++          if (std::find(supplied.begin(), supplied.end(), narrow(dialog.name)) == supplied.end()) {
++            continue;
++          }
++          const auto status = RegDeleteValueW(key, dialog.name);
++          clean = clean && (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
++        }
++        RegCloseKey(key);
++      }
++      close_user_hive(hive);
++      if (clean) {
++        std::filesystem::remove(journal_path(), ec);
++      } else {
++        BOOST_LOG(warning) << "Gaming posture: could not remove the confirmation answers; they stay journaled for the next start"sv;
++      }
++    }
++
++    /// Answer the switch confirmations in the user's hive where no answer exists yet, journaling each one first.
++    void supply_answers() {
++      HKEY key = nullptr;
++      const HKEY hive = open_user_hive();
++      const auto status = RegCreateKeyExW(hive, dialog_results_key, 0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr);
++      close_user_hive(hive);
++      if (status != ERROR_SUCCESS) {
++        BOOST_LOG(warning) << "Gaming posture: could not open the confirmation answers; Windows may ask before switching"sv;
++        return;
++      }
++      for (const auto &dialog : dialog_answers) {
++        if (RegQueryValueExW(key, dialog.name, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
++          continue;  // Already answered, by the user or by an earlier switch of ours.
++        }
++        std::ofstream(journal_path(), std::ios::app) << narrow(dialog.name) << '\n';
++        RegSetValueExW(key, dialog.name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&dialog.answer), sizeof(dialog.answer));
++      }
++      RegCloseKey(key);
++    }
++
++    bool wait_for_active(bool wanted) {
++      const auto &api = gaming_api();
++      const auto deadline = std::chrono::steady_clock::now() + switch_timeout;
++      while (std::chrono::steady_clock::now() < deadline) {
++        if ((api.active() != FALSE) == wanted) {
++          return true;
++        }
++        std::this_thread::sleep_for(switch_poll);
++      }
++      return (api.active() != FALSE) == wanted;
++    }
++
++    /// Verdict of a switch, also the exit code of the switch instance.
++    enum switch_result_e : int {
++      switched = 0,  ///< This switch put the host in the wanted state.
++      unchanged = 1,  ///< Windows did not change state in time; a confirmation may be waiting on screen.
++      bad_request = 2,
++      unsupported = 3,
++      no_home_app = 4,  ///< The user chose no home app, so Windows offers no switch.
++      already = 5,  ///< The host was in the wanted state before; nothing was switched.
++    };
++
++    /// Switch from this process, which must run as the logged-on user. The call into Windows does not
++    /// return while a confirmation is open, so it runs on its own thread and the state wait bounds it.
++    switch_result_e switch_in_process(bool enter) {
++      const auto &api = gaming_api();
++      if (!api.supported || !api.active || !api.set || api.supported() == FALSE) {
++        return unsupported;
++      }
++      if ((api.active() != FALSE) == enter) {
++        return already;
++      }
++      if (!api.can_set || api.can_set() == FALSE) {
++        return no_home_app;
++      }
++      std::thread([set = api.set, enter] {
++        set(enter ? TRUE : FALSE);
++      }).detach();
++      return wait_for_active(enter) ? switched : unchanged;
++    }
++
++    /// Start this executable as the logged-on user to make the switch there, and wait for its verdict.
++    switch_result_e switch_as_user(bool enter) {
++      wchar_t executable[MAX_PATH] = {};
++      const DWORD length = GetModuleFileNameW(nullptr, executable, ARRAYSIZE(executable));
++      if (length == 0 || length >= ARRAYSIZE(executable)) {
++        return unchanged;
++      }
++      std::string cmd = "\"" + platf::to_utf8(executable) + "\" ";
++      cmd += tablet_posture::gaming_switch_arg;
++      cmd += enter ? " enter" : " leave";
++
++      platf::bp::environment env = platf::bp::this_process::env();
++      auto working_dir = boost::filesystem::path();
++      std::error_code ec;
++      auto child = platf::run_command(false, false, cmd, working_dir, env, nullptr, ec, nullptr);
++      if (ec) {
++        BOOST_LOG(warning) << "Gaming posture: could not start the switch as the logged-on user: "sv << ec.message();
++        return unchanged;
++      }
++      // The instance gives up after switch_timeout; allow for its start on top of that.
++      const auto deadline = std::chrono::steady_clock::now() + switch_timeout + 4s;
++      while (child.running(ec) && !ec) {
++        if (std::chrono::steady_clock::now() >= deadline) {
++          child.detach();
++          return unchanged;
++        }
++        std::this_thread::sleep_for(switch_poll);
++      }
++      const int code = child.exit_code();
++      return code >= switched && code <= already ? static_cast<switch_result_e>(code) : unchanged;
++    }
++  }  // namespace
++
++  gaming_result_e apply_gaming(bool enter) {
++    const auto &api = gaming_api();
++    if (!api.supported || !api.set || api.supported() == FALSE) {
++      if (enter) {
++        BOOST_LOG(warning) << "Gaming posture: this Windows does not offer the Xbox full screen experience"sv;
++      }
++      return enter ? gaming_result_e::failed : gaming_result_e::already;
++    }
++
++    supply_answers();
++
++    // Only a host that runs as the logged-on user is offered the switch itself.
++    const bool own_switch = api.can_set && api.can_set() != FALSE;
++    const auto result = own_switch ? switch_in_process(enter) : switch_as_user(enter);
++
++    if (result != switched && result != already) {
++      const auto action = enter ? "enter"sv : "leave"sv;
++      if (result == no_home_app) {
++        BOOST_LOG(warning) << "Gaming posture: Windows cannot "sv << action
++                           << " the Xbox full screen experience: the logged-on user has no home app. "sv
++                           << "Choose one under Settings > Gaming > Xbox mode (the Xbox app)."sv;
++      } else if (result == unsupported) {
++        BOOST_LOG(warning) << "Gaming posture: Windows does not offer the Xbox full screen experience to the logged-on user"sv;
++      } else {
++        BOOST_LOG(warning) << "Gaming posture: Windows did not "sv << action
++                           << " the Xbox full screen experience. A confirmation may be waiting on the host screen."sv;
++      }
++    }
++    if (!enter || result != switched) {
++      // Nothing more to confirm once the host is back on the desktop, or when it made no switch.
++      withdraw_answers();
++    }
++
++    std::error_code ec;
++    if (enter && result == switched) {
++      std::ofstream(entered_path()) << '\n';
++    } else if (!enter && (result == switched || result == already)) {
++      std::filesystem::remove(entered_path(), ec);
++    }
++
++    if (result == switched) {
++      return gaming_result_e::switched;
++    }
++    return result == already ? gaming_result_e::already : gaming_result_e::failed;
++  }
++
++  bool recover_gaming() {
++    // A leave supplies its answers again, so nothing a previous host process left behind is needed.
++    withdraw_answers();
++    std::error_code ec;
++    return std::filesystem::exists(entered_path(), ec);
++  }
++}  // namespace tablet_posture::backend
++
++namespace tablet_posture {
++  int run_gaming_switch(int argc, char **argv) {
++    const std::string_view verb = argc > 2 ? argv[2] : "";
++    if (verb != "enter"sv && verb != "leave"sv) {
++      return backend::bad_request;
++    }
++    return backend::switch_in_process(verb == "enter"sv);
++  }
++}  // namespace tablet_posture
+diff --git a/src/platform/windows/tablet_posture.cpp b/src/platform/windows/tablet_posture.cpp
+new file mode 100644
+index 000000000..ee39a819f
+--- /dev/null
++++ b/src/platform/windows/tablet_posture.cpp
+@@ -0,0 +1,316 @@
++/**
++ * @file src/platform/windows/tablet_posture.cpp
++ * @brief Windows backend of the host laptop/slate state (see src/tablet_posture.h).
++ *
++ * Windows computes "tablet posture" in InputHost (DevicePostureHelpers::CalculateDevicePostureMode)
++ * and the shell reads it to dock the touch keyboard and switch to the tablet taskbar. It is a
++ * tablet when the device is convertible, the laptop/slate indicator says slate, it is not docked, and
++ * the display configuration is a valid tablet one. This backend supplies those inputs for a host
++ * whose display is a virtual one:
++ *
++ *  - Microsoft's inbox "GPIO Laptop or Slate Indicator Driver" (msgpiowin32.inf, hardware id
++ *    PNP0C60) provides the indicator. The device is created on first use as a root-enumerated device,
++ *    exactly like the virtual gamepad root device. Writing one byte to its interface sets the state:
++ *    1 = laptop, 0 = slate. The kernel then updates ConvertibleSlateMode and the system metric live.
++ *  - PriorityControl\ConvertibilityEnabled and PriorityControl\CSMIgnoreDisplayConfig are Windows'
++ *    own OEM declarations ("this device is a convertible", "do not judge the display configuration").
++ *    They are set only while the host is a slate and restored to what they were afterwards. A journal
++ *    file lets a restarted host undo them after a crash.
++ */
++// standard includes
++#include <array>
++#include <cwchar>
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <optional>
++#include <string>
++
++// platform includes
++#include <winsock2.h>
++#include <windows.h>
++
++#include <setupapi.h>
++
++// local includes
++#include "src/logging.h"
++#include "src/platform/common.h"
++#include "src/tablet_posture_policy.h"
++
++using namespace std::literals;
++
++namespace tablet_posture::backend {
++  bool apply(state_e state);
++
++  void recover(bool resync);
++}  // namespace tablet_posture::backend
++
++namespace tablet_posture::backend {
++  namespace {
++    // GUID_GPIOBUTTONS_LAPTOPSLATE_INTERFACE
++    const GUID laptop_slate_interface = {0x317fc439, 0x3f77, 0x41c8, {0xb0, 0x9e, 0x08, 0xad, 0x63, 0x27, 0x2a, 0xa3}};
++    // GUID_DEVCLASS_HIDCLASS
++    const GUID hid_class = {0x745a17a0, 0x74d3, 0x11d0, {0xb6, 0xfe, 0x00, 0xa0, 0xc9, 0x0f, 0x57, 0xda}};
++
++    constexpr auto indicator_hardware_id = L"PNP0C60";
++    constexpr auto indicator_inf = L"C:\\Windows\\INF\\msgpiowin32.inf";
++    constexpr auto priority_control = L"SYSTEM\\CurrentControlSet\\Control\\PriorityControl";
++    constexpr auto convertibility_value = L"ConvertibilityEnabled";
++    constexpr auto ignore_display_value = L"CSMIgnoreDisplayConfig";
++
++    constexpr DWORD install_flag_force = 0x00000001;  // INSTALLFLAG_FORCE
++
++    constexpr unsigned char laptop_byte = 1;
++    constexpr unsigned char slate_byte = 0;
++
++    std::filesystem::path journal_path() {
++      return platf::appdata() / "tablet_posture.journal";
++    }
++
++    /// Path of the laptop/slate indicator interface, or nullopt when no such device exists.
++    std::optional<std::wstring> indicator_path() {
++      HDEVINFO set = SetupDiGetClassDevsW(&laptop_slate_interface, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
++      if (set == INVALID_HANDLE_VALUE) {
++        return std::nullopt;
++      }
++      std::optional<std::wstring> path;
++      SP_DEVICE_INTERFACE_DATA data {};
++      data.cbSize = sizeof(data);
++      if (SetupDiEnumDeviceInterfaces(set, nullptr, &laptop_slate_interface, 0, &data)) {
++        DWORD required = 0;
++        SetupDiGetDeviceInterfaceDetailW(set, &data, nullptr, 0, &required, nullptr);
++        std::string buffer(required, '\0');
++        auto *detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(buffer.data());
++        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
++        if (SetupDiGetDeviceInterfaceDetailW(set, &data, detail, required, nullptr, nullptr)) {
++          path = std::wstring(detail->DevicePath);
++        }
++      }
++      SetupDiDestroyDeviceInfoList(set);
++      return path;
++    }
++
++    /// Create the root-enumerated indicator device and bind the inbox driver to it.
++    bool create_indicator() {
++      HDEVINFO set = SetupDiCreateDeviceInfoList(&hid_class, nullptr);
++      if (set == INVALID_HANDLE_VALUE) {
++        return false;
++      }
++      SP_DEVINFO_DATA device_info {};
++      device_info.cbSize = sizeof(device_info);
++      bool ok = SetupDiCreateDeviceInfoW(set, L"HIDClass", &hid_class, L"Vibepollo laptop/slate indicator", nullptr, DICD_GENERATE_ID, &device_info);
++      if (ok) {
++        std::array<wchar_t, 16> ids {};
++        wcscpy(ids.data(), indicator_hardware_id);  // double-NUL terminated multi-string
++        ok = SetupDiSetDeviceRegistryPropertyW(set, &device_info, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.data()), static_cast<DWORD>(ids.size() * sizeof(wchar_t)));
++      }
++      if (ok) {
++        ok = SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, &device_info);
++      }
++      SetupDiDestroyDeviceInfoList(set);
++      if (!ok) {
++        BOOST_LOG(warning) << "Tablet posture: could not register the indicator device, error "sv << GetLastError();
++        return false;
++      }
++      // newdev.dll is loaded on demand: device creation happens once per machine, and this keeps the
++      // host free of a link-time dependency on it.
++      using update_driver_fn = BOOL(WINAPI *)(HWND, LPCWSTR, LPCWSTR, DWORD, PBOOL);
++      HMODULE newdev = LoadLibraryW(L"newdev.dll");
++      const auto update_driver = newdev ? reinterpret_cast<update_driver_fn>(reinterpret_cast<void *>(GetProcAddress(newdev, "UpdateDriverForPlugAndPlayDevicesW"))) : nullptr;
++      if (!update_driver) {
++        BOOST_LOG(warning) << "Tablet posture: newdev.dll is unavailable, error "sv << GetLastError();
++        if (newdev) {
++          FreeLibrary(newdev);
++        }
++        return false;
++      }
++      BOOL reboot = FALSE;
++      const BOOL bound = update_driver(nullptr, indicator_hardware_id, indicator_inf, install_flag_force, &reboot);
++      const DWORD bind_error = bound ? ERROR_SUCCESS : GetLastError();
++      FreeLibrary(newdev);
++      if (!bound) {
++        BOOST_LOG(warning) << "Tablet posture: could not bind the inbox laptop/slate driver, error "sv << bind_error;
++        return false;
++      }
++      BOOST_LOG(info) << "Tablet posture: created the laptop/slate indicator device"sv;
++      return true;
++    }
++
++    /// Value of a PriorityControl DWORD, or nullopt when absent.
++    std::optional<DWORD> read_control_value(const wchar_t *name) {
++      DWORD data = 0;
++      DWORD size = sizeof(data);
++      if (RegGetValueW(HKEY_LOCAL_MACHINE, priority_control, name, RRF_RT_REG_DWORD, nullptr, &data, &size) != ERROR_SUCCESS) {
++        return std::nullopt;
++      }
++      return data;
++    }
++
++    /// One write of the state byte to the indicator interface.
++    bool write_indicator_once(const std::wstring &path, unsigned char value) {
++      HANDLE device = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
++      if (device == INVALID_HANDLE_VALUE) {
++        BOOST_LOG(warning) << "Tablet posture: could not open the indicator, error "sv << GetLastError();
++        return false;
++      }
++      DWORD written = 0;
++      const BOOL ok = WriteFile(device, &value, 1, &written, nullptr);
++      const DWORD write_error = ok ? ERROR_SUCCESS : GetLastError();
++      CloseHandle(device);
++      if (!ok || written != 1) {
++        BOOST_LOG(warning) << "Tablet posture: indicator write failed, error "sv << write_error;
++        return false;
++      }
++      return true;
++    }
++
++    /// True once the kernel reports the written state in ConvertibleSlateMode (it mirrors the byte: 1 laptop, 0 slate).
++    bool wait_for_state(unsigned char value) {
++      for (int attempt = 0; attempt < 20; ++attempt) {
++        if (read_control_value(L"ConvertibleSlateMode") == std::optional<DWORD> {value}) {
++          return true;
++        }
++        Sleep(100);
++      }
++      return false;
++    }
++
++    bool write_indicator(unsigned char value) {
++      auto path = indicator_path();
++      if (!path && create_indicator()) {
++        for (int attempt = 0; attempt < 20 && !path; ++attempt) {
++          Sleep(250);
++          path = indicator_path();
++        }
++        Sleep(1000);  // let the new device finish starting before its first write
++      }
++      if (!path) {
++        BOOST_LOG(warning) << "Tablet posture: no laptop/slate indicator device available"sv;
++        return false;
++      }
++      for (int attempt = 0; attempt < 3; ++attempt) {
++        if (write_indicator_once(*path, value) && wait_for_state(value)) {
++          return true;
++        }
++        Sleep(500);
++      }
++      BOOST_LOG(warning) << "Tablet posture: Windows did not report the requested laptop/slate state"sv;
++      return false;
++    }
++
++    bool write_control_value(const wchar_t *name, std::optional<DWORD> value) {
++      HKEY key = nullptr;
++      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, priority_control, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) {
++        return false;
++      }
++      LONG status = ERROR_SUCCESS;
++      if (value) {
++        const DWORD data = *value;
++        status = RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&data), sizeof(data));
++      } else {
++        status = RegDeleteValueW(key, name);
++        if (status == ERROR_FILE_NOT_FOUND) {
++          status = ERROR_SUCCESS;
++        }
++      }
++      RegCloseKey(key);
++      return status == ERROR_SUCCESS;
++    }
++
++    std::string journal_text(std::optional<DWORD> convertibility, std::optional<DWORD> ignore_display) {
++      const auto field = [](const char *name, const std::optional<DWORD> &value) {
++        return std::string(name) + "=" + (value ? std::to_string(*value) : std::string("absent")) + "\n";
++      };
++      return field("convertibility", convertibility) + field("ignore_display", ignore_display);
++    }
++
++    std::optional<std::optional<DWORD>> parse_journal_field(const std::string &text, const std::string &name) {
++      const auto at = text.find(name + "=");
++      if (at == std::string::npos) {
++        return std::nullopt;
++      }
++      const auto start = at + name.size() + 1;
++      const auto end = text.find('\n', start);
++      const auto value = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
++      if (value == "absent") {
++        return std::optional<DWORD> {};
++      }
++      try {
++        return std::optional<DWORD> {static_cast<DWORD>(std::stoul(value))};
++      } catch (...) {
++        return std::nullopt;
++      }
++    }
++
++    /// Declare the host a convertible with a tablet-capable display. Remembers the previous values once.
++    bool declare() {
++      std::error_code ec;
++      if (!std::filesystem::exists(journal_path(), ec)) {
++        std::ofstream(journal_path(), std::ios::trunc) << journal_text(read_control_value(convertibility_value), read_control_value(ignore_display_value));
++      }
++      const bool a = write_control_value(convertibility_value, 1);
++      const bool b = write_control_value(ignore_display_value, 1);
++      if (!a || !b) {
++        BOOST_LOG(warning) << "Tablet posture: could not write the convertible declaration (the host service needs administrator rights)"sv;
++      }
++      return a && b;
++    }
++
++    /// Put the declaration values back to what they were before the host changed them.
++    void undeclare() {
++      std::error_code ec;
++      if (!std::filesystem::exists(journal_path(), ec)) {
++        return;
++      }
++      std::ifstream in(journal_path());
++      const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++      in.close();
++      const auto convertibility = parse_journal_field(text, "convertibility");
++      const auto ignore_display = parse_journal_field(text, "ignore_display");
++      bool ok = true;
++      if (convertibility) {
++        ok = write_control_value(convertibility_value, *convertibility) && ok;
++      }
++      if (ignore_display) {
++        ok = write_control_value(ignore_display_value, *ignore_display) && ok;
++      }
++      if (ok) {
++        std::filesystem::remove(journal_path(), ec);
++      } else {
++        BOOST_LOG(warning) << "Tablet posture: could not restore the convertible declaration; it stays journaled for the next start"sv;
++      }
++    }
++  }  // namespace
++
++  bool apply(state_e state) {
++    if (state == state_e::slate) {
++      if (!declare()) {
++        return false;
++      }
++      return write_indicator(slate_byte);
++    }
++    const bool ok = write_indicator(laptop_byte);
++    undeclare();
++    return ok;
++  }
++
++  void recover(bool resync) {
++    std::error_code ec;
++    if (std::filesystem::exists(journal_path(), ec)) {
++      BOOST_LOG(warning) << "Tablet posture: restoring the state left by a previous host run"sv;
++      if (indicator_path()) {
++        write_indicator(laptop_byte);
++      }
++      undeclare();
++      return;
++    }
++    // The inbox indicator driver starts in slate after every boot. Nothing declares the host a
++    // convertible at this point, so Windows is not in tablet posture, but the state should still
++    // read laptop until a touch client asks for slate.
++    if (resync && indicator_path() && read_control_value(L"ConvertibleSlateMode") == std::optional<DWORD> {slate_byte}) {
++      if (write_indicator(laptop_byte)) {
++        BOOST_LOG(info) << "Tablet posture: indicator reset to laptop at start"sv;
++      }
++    }
++  }
++}  // namespace tablet_posture::backend
+diff --git a/src/stream.cpp b/src/stream.cpp
+index 7b3d6b3cb..307167d90 100644
+--- a/src/stream.cpp
++++ b/src/stream.cpp
+@@ -57,7 +57,9 @@ extern "C" {
+ #include "nvhttp.h"
+ #include "host_stream_control.h"
+ #include "platform/common.h"
++#include "posture_size.h"
+ #include "process.h"
++#include "tablet_posture.h"
+ #include "pyrowave_policy.h"
+ #include "pyrowave_bandwidth.h"
+ #include "pyrowave_protocol.h"
+@@ -645,6 +647,8 @@ namespace stream {
+   };
+ 
+   struct session_t {
++    tablet_posture::client_mode_e client_mode = tablet_posture::client_mode_e::desktop;  ///< Host mode the client posture selected (desktop, tablet or handheld).
++    bool tablet_posture_held = false;  ///< This session registered its client with tablet_posture.
+     std::shared_ptr<void> display_power_guard;
+     std::shared_ptr<void> audio_context_guard;
+     std::shared_ptr<void> normal_display_capture;
+@@ -4258,6 +4262,11 @@ namespace stream {
+       session.display_power_guard.reset();
+       BOOST_LOG(info) << "Session ended"sv;
+ 
++      if (session.tablet_posture_held) {
++        session.tablet_posture_held = false;
++        tablet_posture::client_stopped(session.device_uuid);
++      }
++
+       // Record session end in persistent history (fires exactly once, after join)
+       session_history::end_session(session.history_uuid);
+ 
+@@ -4382,6 +4391,11 @@ namespace stream {
+         session_history::begin_session(meta);
+       }
+ 
++      if (!session.tablet_posture_held) {
++        tablet_posture::client_started(session.device_uuid, session.client_mode);
++        session.tablet_posture_held = true;
++      }
++
+       // If this is the first session, invoke the platform callbacks
+       const bool first_rtsp_session = ++running_sessions == 1;
+       const bool first_frame_limiter_session =
+@@ -4564,6 +4578,7 @@ namespace stream {
+       // a distinct row in the session_history database.
+       session->history_uuid = uuid_util::uuid_t::generate().string();
+       session->permission = launch_session.perm;
++      session->client_mode = tablet_posture::to_client_mode(tablet_posture::host_mode_for(launch_session.client_posture));
+ 
+       session->do_cmds = std::move(launch_session.client_do_cmds);
+       session->undo_cmds = std::move(launch_session.client_undo_cmds);
+diff --git a/src/tablet_posture.cpp b/src/tablet_posture.cpp
+new file mode 100644
+index 000000000..589d038ba
+--- /dev/null
++++ b/src/tablet_posture.cpp
+@@ -0,0 +1,259 @@
++/**
++ * @file src/tablet_posture.cpp
++ * @brief Client-driven laptop/slate state (see src/tablet_posture.h); platform backends do the actual switching.
++ */
++// standard includes
++#include <condition_variable>
++#include <mutex>
++#include <thread>
++
++// local includes
++#include "src/config.h"
++#include "src/logging.h"
++#include "src/tablet_posture.h"
++
++using namespace std::literals;
++
++namespace tablet_posture {
++  namespace backend {
++    /// Switch the host to `state`. Returns false when the platform could not do it. Implemented per platform.
++    bool apply(state_e state);
++
++    /// Enter (`true`) or leave (`false`) the gaming posture, the Xbox full screen experience. Only called while the host is a slate. Implemented per platform.
++    gaming_result_e apply_gaming(bool enter);
++
++    /// Undo a previous host process' leftovers; with `resync` also put a freshly booted indicator back to laptop. Implemented per platform.
++    void recover(bool resync);
++
++    /// Undo what a previous host process left behind for the gaming posture. Returns true when that process
++    /// entered the gaming posture and never left it. Implemented per platform.
++    bool recover_gaming();
++  }  // namespace backend
++
++#ifndef _WIN32
++  namespace backend {
++    bool apply(state_e) {
++      return true;
++    }
++
++    gaming_result_e apply_gaming(bool) {
++      return gaming_result_e::switched;
++    }
++
++    void recover(bool) {}
++
++    bool recover_gaming() {
++      return false;
++    }
++  }  // namespace backend
++#endif
++
++  namespace {
++    constexpr auto retry_delay = 5s;
++
++    std::mutex mutex;
++    std::condition_variable wake;
++    registry_t registry;
++    state_e applied = state_e::laptop;
++    bool gaming_applied = false;
++    std::thread worker;
++    bool stopping = false;
++
++    const char *name(state_e state) {
++      return state == state_e::slate ? "slate (tablet)" : "laptop (desktop)";
++    }
++
++    const char *mode_name(client_mode_e mode) {
++      switch (mode) {
++        case client_mode_e::tablet:
++          return "tablet";
++        case client_mode_e::handheld:
++          return "handheld";
++        case client_mode_e::desktop:
++          break;
++      }
++      return "desktop";
++    }
++
++    void worker_main() {
++      std::unique_lock lock {mutex};
++      std::optional<std::chrono::steady_clock::time_point> laptop_due;
++      std::optional<std::chrono::steady_clock::time_point> retry_due;
++      std::optional<std::chrono::steady_clock::time_point> gaming_leave_due;
++      // The wanted gaming state that needs no further attempt until it changes again: the enter failed, or
++      // the user was in the gaming posture already.
++      std::optional<bool> gaming_settled_for;
++      while (!stopping) {
++        const auto wanted = registry.state();
++        const bool wanted_gaming = registry.gaming();
++        const auto now = std::chrono::steady_clock::now();
++
++        if (gaming_settled_for && *gaming_settled_for != wanted_gaming) {
++          gaming_settled_for.reset();
++        }
++
++        // Leave the gaming posture first, after the same grace as laptop, and before any switch to laptop.
++        if (gaming_applied && !wanted_gaming) {
++          if (!gaming_leave_due) {
++            gaming_leave_due = now + laptop_grace;
++          }
++          if (now < *gaming_leave_due) {
++            wake.wait_until(lock, *gaming_leave_due);
++            continue;
++          }
++          gaming_leave_due.reset();
++          lock.unlock();
++          const auto left = backend::apply_gaming(false);
++          lock.lock();
++          if (left == backend::gaming_result_e::failed) {
++            BOOST_LOG(warning) << "Tablet posture: could not leave the Xbox full screen experience"sv;
++          }
++          gaming_applied = false;
++          if (registry.state() == state_e::laptop) {
++            laptop_due = std::chrono::steady_clock::now();  // the grace already passed
++          }
++          continue;
++        }
++        gaming_leave_due.reset();
++
++        if (wanted != applied) {
++          if (retry_due && now < *retry_due) {
++            wake.wait_until(lock, *retry_due);
++            continue;
++          }
++          if (wanted == state_e::laptop) {
++            if (!laptop_due) {
++              laptop_due = now + laptop_grace;
++            }
++            if (now < *laptop_due) {
++              wake.wait_until(lock, *laptop_due);
++              continue;
++            }
++          }
++          laptop_due.reset();
++          lock.unlock();
++          const bool ok = backend::apply(wanted);
++          lock.lock();
++          if (ok) {
++            BOOST_LOG(info) << "Tablet posture: host is now "sv << name(wanted);
++            applied = wanted;
++            retry_due.reset();
++          } else {
++            BOOST_LOG(warning) << "Tablet posture: could not switch the host to "sv << name(wanted) << "; retrying"sv;
++            retry_due = std::chrono::steady_clock::now() + retry_delay;
++          }
++          continue;
++        }
++        laptop_due.reset();
++        retry_due.reset();
++
++        if (wanted_gaming && applied == state_e::slate && !gaming_applied && !gaming_settled_for) {
++          lock.unlock();
++          const auto entered = backend::apply_gaming(true);
++          lock.lock();
++          if (entered == backend::gaming_result_e::switched) {
++            BOOST_LOG(info) << "Tablet posture: host is now in the Xbox full screen experience"sv;
++            gaming_applied = true;
++          } else if (entered == backend::gaming_result_e::already) {
++            // The user chose it before the session, so it is not the host's to leave afterwards.
++            BOOST_LOG(info) << "Tablet posture: host was already in the Xbox full screen experience; it stays on after the session"sv;
++            gaming_settled_for = true;
++          } else {
++            BOOST_LOG(warning) << "Tablet posture: could not enter the Xbox full screen experience; staying in tablet mode"sv;
++            gaming_settled_for = true;
++          }
++          continue;
++        }
++
++        wake.wait(lock);
++      }
++    }
++
++    /// Caller holds the mutex.
++    void ensure_worker() {
++      if (!worker.joinable() && !stopping) {
++        worker = std::thread(worker_main);
++      }
++    }
++
++    void changed() {
++      ensure_worker();
++      wake.notify_all();
++    }
++  }  // namespace
++
++  posture::host_mode_e host_mode_for(const posture::hints_t &hints) {
++    const auto policy = posture::parse_handheld_policy(config::video.handheld_mode).value_or(posture::handheld_policy_e::xbox_fullscreen);
++    return posture::host_mode(hints, policy);
++  }
++
++  void client_started(const std::string &client, client_mode_e mode) {
++    if (!config::video.touch_tablet_mode) {
++      return;
++    }
++    std::lock_guard lock {mutex};
++    registry.start(client, mode);
++    changed();
++  }
++
++  void client_updated(const std::string &client, client_mode_e mode) {
++    if (!config::video.touch_tablet_mode) {
++      return;
++    }
++    std::lock_guard lock {mutex};
++    registry.update(client, mode);
++    changed();
++  }
++
++  void client_stopped(const std::string &client) {
++    std::lock_guard lock {mutex};
++    registry.stop(client);
++    changed();
++  }
++
++  void set_override(std::optional<client_mode_e> forced) {
++    std::lock_guard lock {mutex};
++    registry.set_override(forced);
++    BOOST_LOG(info) << "Tablet posture: override "sv << (forced ? mode_name(*forced) : "cleared");
++    changed();
++  }
++
++  status_t status() {
++    std::lock_guard lock {mutex};
++    std::optional<state_e> override_state;
++    if (const auto forced = registry.override_mode()) {
++      override_state = *forced == client_mode_e::desktop ? state_e::laptop : state_e::slate;
++    }
++    return {applied, registry.state(), registry.mode(), gaming_applied, override_state, registry.override_mode(), config::video.touch_tablet_mode, registry.clients()};
++  }
++
++  void recover() {
++    std::lock_guard lock {mutex};
++    backend::recover(config::video.touch_tablet_mode);
++    if (backend::recover_gaming()) {
++      // A previous host process entered the gaming posture and never left it: the worker leaves it now.
++      gaming_applied = true;
++      changed();
++    }
++  }
++
++  void shutdown() {
++    {
++      std::lock_guard lock {mutex};
++      stopping = true;
++    }
++    wake.notify_all();
++    if (worker.joinable()) {
++      worker.join();
++    }
++    std::lock_guard lock {mutex};
++    if (gaming_applied) {
++      backend::apply_gaming(false);
++      gaming_applied = false;
++    }
++    if (applied != state_e::laptop || registry.state() != state_e::laptop) {
++      backend::apply(state_e::laptop);
++      applied = state_e::laptop;
++    }
++  }
++}  // namespace tablet_posture
+diff --git a/src/tablet_posture.h b/src/tablet_posture.h
+new file mode 100644
+index 000000000..a56df8867
+--- /dev/null
++++ b/src/tablet_posture.h
+@@ -0,0 +1,93 @@
++/**
++ * @file src/tablet_posture.h
++ * @brief Host laptop/slate state driven by the streaming clients' posture.
++ *
++ * Windows only switches to tablet behaviour (touch keyboard on text focus, tablet taskbar) when it
++ * believes the machine is a convertible whose keyboard is folded back or detached. A virtual
++ * display host is neither, so the host reports that state itself, through Windows' own laptop/slate
++ * indicator interface, whenever a touch-primary client streams. Clients drive it: `clientPosture`
++ * at launch and resume, and the `/posture` endpoint while streaming (keyboard attached, detached,
++ * flipped, flipped back). Controlled by the `touch_tablet_mode` option. Other platforms: no-ops.
++ *
++ * Switching to slate happens at once; switching back to laptop waits a few seconds so a resume or
++ * reconnect (which ends one session and starts the next) does not flicker the shell. All Windows work
++ * happens on a worker thread, never on a streaming or HTTP thread.
++ */
++#pragma once
++
++#include <chrono>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "posture_size.h"
++#include "tablet_posture_policy.h"
++
++namespace tablet_posture {
++  /// The mode a client's host mode asks of the posture backend.
++  inline client_mode_e to_client_mode(posture::host_mode_e mode) {
++    switch (mode) {
++      case posture::host_mode_e::tablet:
++        return client_mode_e::tablet;
++      case posture::host_mode_e::handheld:
++        return client_mode_e::handheld;
++      case posture::host_mode_e::desktop:
++        break;
++    }
++    return client_mode_e::desktop;
++  }
++
++  /// Host mode for these hints, with the configured `handheld_mode` policy applied. Hints must already include any per-client override.
++  posture::host_mode_e host_mode_for(const posture::hints_t &hints);
++
++  /// Delay before the host returns to laptop after the last touch-primary client left.
++  inline constexpr std::chrono::milliseconds laptop_grace {3000};
++
++  /// A session of `client` started. `mode` is the client's current host mode.
++  void client_started(const std::string &client, client_mode_e mode);
++
++  /// The client's posture changed during a session. Ignored when the client has no active session.
++  void client_updated(const std::string &client, client_mode_e mode);
++
++  /// A session of `client` ended. The last touch-primary client leaving puts the host back to laptop.
++  void client_stopped(const std::string &client);
++
++  /// Force the state regardless of clients (a simulated keyboard detach/attach); nullopt gives control back to the clients.
++  void set_override(std::optional<client_mode_e> forced);
++
++  namespace backend {
++    /// Outcome of a request to enter or leave the gaming posture.
++    enum class gaming_result_e {
++      switched,  ///< The host made the switch.
++      already,  ///< The host was in the wanted state before; nothing was switched.
++      failed,
++    };
++  }  // namespace backend
++
++  struct status_t {
++    state_e applied;  ///< What Windows was last told.
++    state_e wanted;  ///< What the clients (or the override) ask for.
++    client_mode_e wanted_mode;  ///< The wanted state as a mode: desktop, tablet or handheld.
++    bool gaming_applied;  ///< The host entered the gaming posture (Xbox full screen experience) and will leave it.
++    std::optional<state_e> override_state;
++    std::optional<client_mode_e> override_mode;
++    bool enabled;  ///< touch_tablet_mode
++    std::vector<registry_t::client_info_t> clients;
++  };
++
++  status_t status();
++
++  /// First argument of the instance a Windows host service starts as the logged-on user to switch the
++  /// gaming posture; followed by `enter` or `leave`. Handled before any host initialization.
++  inline constexpr std::string_view gaming_switch_arg = "--gaming-posture-switch";
++
++  /// Windows: make the switch `argv[2]` asks for and return 0 when the host is in the wanted state.
++  int run_gaming_switch(int argc, char **argv);
++
++  /// At host start: undo whatever a previous host process left behind after a crash.
++  void recover();
++
++  /// At host stop: put the host back to laptop and stop the worker.
++  void shutdown();
++}  // namespace tablet_posture
+diff --git a/src/tablet_posture_policy.h b/src/tablet_posture_policy.h
+new file mode 100644
+index 000000000..c826d1957
+--- /dev/null
++++ b/src/tablet_posture_policy.h
+@@ -0,0 +1,143 @@
++/**
++ * @file src/tablet_posture_policy.h
++ * @brief Pure rules for the host's laptop/slate (tablet) state.
++ *
++ * Windows decides "tablet posture" from a laptop/slate indicator, the way a convertible laptop
++ * reports its keyboard being folded back or detached. The host plays that indicator for the
++ * streaming clients: while at least one active client is touch-primary (tablet, handheld,
++ * phone, or a touch device without a declared posture) the host is a slate; with no such
++ * client, or when the client reports a laptop or desktop posture (keyboard attached), it is a
++ * laptop. This header holds the bookkeeping so it can be tested without Windows.
++ */
++#pragma once
++
++#include <cstddef>
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace tablet_posture {
++  enum class state_e {
++    laptop,  ///< Keyboard attached or folded out: Windows desktop behaviour.
++    slate,  ///< Keyboard detached or folded back: Windows tablet behaviour.
++  };
++
++  /// What a client asks of the host. Tablet and handheld both mean slate; handheld also asks for the gaming posture.
++  enum class client_mode_e {
++    desktop,
++    tablet,
++    handheld,
++  };
++
++  /// Active clients and the mode each one asks for. A client may hold several sessions.
++  class registry_t {
++  public:
++    /// A session of `client` started. Returns true when the host state changed.
++    bool start(const std::string &client, client_mode_e mode) {
++      auto &entry = clients_[client];
++      ++entry.sessions;
++      entry.mode = mode;
++      return refresh();
++    }
++
++    /// The client's posture changed while it streams. Unknown clients are ignored. Returns true when the host state changed.
++    bool update(const std::string &client, client_mode_e mode) {
++      const auto it = clients_.find(client);
++      if (it == clients_.end()) {
++        return false;
++      }
++      it->second.mode = mode;
++      return refresh();
++    }
++
++    /// A session of `client` ended. Returns true when the host state changed.
++    bool stop(const std::string &client) {
++      const auto it = clients_.find(client);
++      if (it == clients_.end()) {
++        return false;
++      }
++      if (--it->second.sessions <= 0) {
++        clients_.erase(it);
++      }
++      return refresh();
++    }
++
++    bool contains(const std::string &client) const {
++      return clients_.find(client) != clients_.end();
++    }
++
++    std::size_t size() const {
++      return clients_.size();
++    }
++
++    /// State the clients ask for, ignoring any override.
++    state_e client_state() const {
++      return client_mode_ == client_mode_e::desktop ? state_e::laptop : state_e::slate;
++    }
++
++    /// Mode the clients ask for (the strongest one: handheld, then tablet, then desktop), ignoring any override.
++    client_mode_e client_mode() const {
++      return client_mode_;
++    }
++
++    /// The mode to apply: the override when set, else what the clients ask for.
++    client_mode_e mode() const {
++      return override_.value_or(client_mode_);
++    }
++
++    /// The state to apply: slate unless the mode is desktop.
++    state_e state() const {
++      return mode() == client_mode_e::desktop ? state_e::laptop : state_e::slate;
++    }
++
++    /// True when the gaming posture (Xbox full screen experience) is wanted.
++    bool gaming() const {
++      return mode() == client_mode_e::handheld;
++    }
++
++    /// Force a mode regardless of the clients (simulates the keyboard being detached or attached). nullopt returns control to the clients.
++    void set_override(std::optional<client_mode_e> forced) {
++      override_ = forced;
++    }
++
++    std::optional<client_mode_e> override_mode() const {
++      return override_;
++    }
++
++    struct client_info_t {
++      std::string id;
++      int sessions;
++      client_mode_e mode;
++    };
++
++    std::vector<client_info_t> clients() const {
++      std::vector<client_info_t> out;
++      for (const auto &[id, entry] : clients_) {
++        out.push_back({id, entry.sessions, entry.mode});
++      }
++      return out;
++    }
++
++  private:
++    struct entry_t {
++      int sessions = 0;
++      client_mode_e mode = client_mode_e::desktop;
++    };
++
++    bool refresh() {
++      const auto before_mode = mode();
++      client_mode_ = client_mode_e::desktop;
++      for (const auto &[client, entry] : clients_) {
++        if (entry.mode > client_mode_) {
++          client_mode_ = entry.mode;
++        }
++      }
++      return mode() != before_mode;
++    }
++
++    std::map<std::string, entry_t> clients_;
++    client_mode_e client_mode_ = client_mode_e::desktop;
++    std::optional<client_mode_e> override_;
++  };
++}  // namespace tablet_posture
+diff --git a/src_assets/windows/drivers/tablet-posture/cleanup.ps1 b/src_assets/windows/drivers/tablet-posture/cleanup.ps1
+new file mode 100644
+index 000000000..ee7cc8192
+--- /dev/null
++++ b/src_assets/windows/drivers/tablet-posture/cleanup.ps1
+@@ -0,0 +1,27 @@
++<#
++.SYNOPSIS
++  Removes the laptop/slate indicator device the Vibepollo host creates for tablet posture.
++
++.DESCRIPTION
++  The host creates one root-enumerated device (ROOT\HIDCLASS\*, hardware id PNP0C60) bound to Microsoft's
++  inbox "GPIO Laptop or Slate Indicator Driver". This script removes only such root-enumerated nodes.
++  A real indicator that firmware exposes (ACPI\PNP0C60) is never touched. The inbox driver package stays
++  in Windows; nothing else is installed.
++#>
++[CmdletBinding()]
++param([switch]$InstallerBestEffort)
++
++$ErrorActionPreference = 'Continue'
++try {
++    $nodes = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
++            $_.InstanceId -like 'ROOT\HIDCLASS\*' -and ($_.HardwareID -contains 'PNP0C60')
++        })
++    foreach ($node in $nodes) {
++        Write-Host "Removing laptop/slate indicator $($node.InstanceId)"
++        & "$env:SystemRoot\System32\pnputil.exe" /remove-device $node.InstanceId | Out-Null
++    }
++} catch {
++    Write-Warning "Laptop/slate indicator cleanup failed: $($_.Exception.Message)"
++    if (-not $InstallerBestEffort) { throw }
++}
++exit 0
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 30f9814e0..20087b4f0 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -705,6 +705,7 @@ sunshine_register_component(NAME test_component_posture_size TEST_SOURCE unit/te
+     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/posture_size.cpp")
+ sunshine_register_component(NAME test_component_posture_state TEST_SOURCE unit/test_posture_state.cpp
+     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/posture_state.cpp" "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/posture_size.cpp")
++sunshine_register_component(NAME test_component_tablet_posture_policy TEST_SOURCE unit/test_tablet_posture_policy.cpp)
+ sunshine_register_component(NAME test_component_single_flight TEST_SOURCE unit/test_single_flight.cpp)
+ sunshine_register_component(NAME test_component_paused_app_monitor TEST_SOURCE unit/test_paused_app_monitor.cpp
+     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/power_action.cpp"
+diff --git a/tests/unit/test_tablet_posture_policy.cpp b/tests/unit/test_tablet_posture_policy.cpp
+new file mode 100644
+index 000000000..5262a847f
+--- /dev/null
++++ b/tests/unit/test_tablet_posture_policy.cpp
+@@ -0,0 +1,173 @@
++#include "../tests_common.h"
++#include "src/tablet_posture_policy.h"
++
++namespace {
++  using namespace tablet_posture;
++
++  constexpr auto desktop = client_mode_e::desktop;
++  constexpr auto tablet = client_mode_e::tablet;
++  constexpr auto handheld = client_mode_e::handheld;
++}  // namespace
++
++TEST(TabletPosturePolicy, StartsAsLaptopWithoutClients) {
++  registry_t registry;
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_EQ(registry.size(), 0u);
++}
++
++TEST(TabletPosturePolicy, TouchClientMakesTheHostASlate) {
++  registry_t registry;
++  EXPECT_TRUE(registry.start("phone", tablet));
++  EXPECT_EQ(registry.state(), state_e::slate);
++}
++
++TEST(TabletPosturePolicy, LaptopClientKeepsDesktop) {
++  registry_t registry;
++  EXPECT_FALSE(registry.start("convertible", desktop));
++  EXPECT_EQ(registry.state(), state_e::laptop);
++}
++
++TEST(TabletPosturePolicy, KeyboardFlipFollowsRuntimeUpdates) {
++  registry_t registry;
++  registry.start("convertible", desktop);
++  EXPECT_TRUE(registry.update("convertible", tablet));  // keyboard folded back
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_FALSE(registry.update("convertible", tablet));  // same class again: no change
++  EXPECT_TRUE(registry.update("convertible", desktop));  // keyboard back
++  EXPECT_EQ(registry.state(), state_e::laptop);
++}
++
++TEST(TabletPosturePolicy, UpdateOfUnknownClientIsIgnored) {
++  registry_t registry;
++  EXPECT_FALSE(registry.update("ghost", tablet));
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_FALSE(registry.contains("ghost"));
++}
++
++TEST(TabletPosturePolicy, SlateWhileAnyClientIsTouchPrimary) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  EXPECT_FALSE(registry.start("convertible", desktop));
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_FALSE(registry.stop("convertible"));
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_TRUE(registry.stop("phone"));
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_EQ(registry.size(), 0u);
++}
++
++TEST(TabletPosturePolicy, ClientWithSeveralSessionsStaysUntilTheLastEnds) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  registry.start("phone", tablet);
++  EXPECT_FALSE(registry.stop("phone"));
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_TRUE(registry.stop("phone"));
++  EXPECT_EQ(registry.state(), state_e::laptop);
++}
++
++TEST(TabletPosturePolicy, StoppingAnUnknownClientIsIgnored) {
++  registry_t registry;
++  EXPECT_FALSE(registry.stop("ghost"));
++  EXPECT_EQ(registry.state(), state_e::laptop);
++}
++
++TEST(TabletPosturePolicy, NewSessionTakesTheLatestPosture) {
++  registry_t registry;
++  registry.start("convertible", tablet);
++  EXPECT_TRUE(registry.start("convertible", desktop));  // resumed with the keyboard attached
++  EXPECT_EQ(registry.state(), state_e::laptop);
++}
++
++TEST(TabletPosturePolicy, OverrideBeatsTheClients) {
++  registry_t registry;
++  registry.start("convertible", desktop);
++  registry.set_override(tablet);  // simulated keyboard detach
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_EQ(registry.client_state(), state_e::laptop);
++  registry.set_override(desktop);
++  registry.update("convertible", tablet);
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_EQ(registry.client_state(), state_e::slate);
++  registry.set_override(std::nullopt);  // back to client control
++  EXPECT_EQ(registry.state(), state_e::slate);
++}
++
++TEST(TabletPosturePolicy, OverrideWorksWithoutAnyClient) {
++  registry_t registry;
++  registry.set_override(tablet);
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_EQ(registry.size(), 0u);
++  EXPECT_EQ(registry.override_mode(), std::optional<client_mode_e> {tablet});
++}
++
++TEST(TabletPosturePolicy, ClientsReportEveryActiveSession) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  registry.start("phone", tablet);
++  registry.start("convertible", desktop);
++  const auto clients = registry.clients();
++  ASSERT_EQ(clients.size(), 2u);
++  // Ordered by client id.
++  EXPECT_EQ(clients[0].id, "convertible");
++  EXPECT_EQ(clients[0].mode, desktop);
++  EXPECT_EQ(clients[1].id, "phone");
++  EXPECT_EQ(clients[1].sessions, 2);
++  EXPECT_EQ(clients[1].mode, tablet);
++}
++
++TEST(TabletPosturePolicy, HandheldClientMakesASlateAndWantsGaming) {
++  registry_t registry;
++  EXPECT_FALSE(registry.gaming());
++  EXPECT_TRUE(registry.start("handheld", handheld));
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_EQ(registry.mode(), handheld);
++  EXPECT_TRUE(registry.gaming());
++}
++
++TEST(TabletPosturePolicy, TabletClientDoesNotWantGaming) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_FALSE(registry.gaming());
++}
++
++TEST(TabletPosturePolicy, StrongestClientModeWins) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  registry.start("handheld", handheld);
++  EXPECT_EQ(registry.mode(), handheld);
++  EXPECT_TRUE(registry.gaming());
++}
++
++TEST(TabletPosturePolicy, HandheldLeavingKeepsSlateWithoutGaming) {
++  registry_t registry;
++  registry.start("phone", tablet);
++  registry.start("handheld", handheld);
++  EXPECT_TRUE(registry.stop("handheld"));
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_FALSE(registry.gaming());
++  EXPECT_EQ(registry.mode(), tablet);
++}
++
++TEST(TabletPosturePolicy, OverrideHandheldWorksWithoutAnyClient) {
++  registry_t registry;
++  registry.set_override(handheld);
++  EXPECT_EQ(registry.state(), state_e::slate);
++  EXPECT_TRUE(registry.gaming());
++  EXPECT_EQ(registry.client_mode(), desktop);
++  registry.set_override(std::nullopt);
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_FALSE(registry.gaming());
++}
++
++TEST(TabletPosturePolicy, OverrideDesktopBeatsAStreamingHandheld) {
++  registry_t registry;
++  registry.start("handheld", handheld);
++  registry.set_override(desktop);
++  EXPECT_EQ(registry.state(), state_e::laptop);
++  EXPECT_FALSE(registry.gaming());
++  EXPECT_EQ(registry.client_mode(), handheld);
++  registry.set_override(std::nullopt);
++  EXPECT_TRUE(registry.gaming());
++}

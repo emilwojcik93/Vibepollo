@@ -1,0 +1,285 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: emilwojcik93 <adminit@adar.pl>
+Date: Sun, 22 Nov 2026 10:07:00 +0100
+Subject: [PATCH] web ui: expose the posture settings
+
+Settings page (Windows only): touch_tablet_mode, handheld_mode (shown while
+tablet mode is on) and touch_posture_diagonal_mm (100..419 mm), with locale
+strings. Devices page: per-client "Treat this device as a touch device" switch
+and per-client posture mode select (auto, desktop, tablet, handheld) in the
+client editor, sent through /api/clients/update. The v2 parity test knows the
+new keys.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../devices/ClientSettingsEditor.vue          | 42 +++++++++++++++++++
+ src_assets/common/assets/web/config.html      |  3 ++
+ .../assets/web/configs/configFieldSchema.ts   |  1 +
+ .../assets/web/configs/settingsSchema.ts      | 20 +++++++++
+ .../assets/web/public/assets/locale/en.json   |  9 ++++
+ .../web/public/assets/locale/ui/en.json       | 10 ++++-
+ .../assets/web/scripts/v2-parity.test.ts      |  3 ++
+ .../common/assets/web/views/DevicesView.vue   | 15 +++++++
+ 8 files changed, 102 insertions(+), 1 deletion(-)
+
+diff --git a/src_assets/common/assets/web/components/devices/ClientSettingsEditor.vue b/src_assets/common/assets/web/components/devices/ClientSettingsEditor.vue
+index aa1163b97..351e5415c 100644
+--- a/src_assets/common/assets/web/components/devices/ClientSettingsEditor.vue
++++ b/src_assets/common/assets/web/components/devices/ClientSettingsEditor.vue
+@@ -25,6 +25,8 @@ export interface ClientCommandDraft {
+ export interface ClientDeviceDraft {
+   name: string;
+   allowSleep: boolean;
++  touchDevice: boolean;
++  postureMode: string;
+   permissions: number;
+   enableLegacyOrdering: boolean;
+   allowClientCommands: boolean;
+@@ -240,6 +242,13 @@ const displayOverrideSummary = computed(() => {
+   return mode;
+ });
+ 
++const postureModeOptions = computed(() => [
++  { label: t('ui.devices.editor.posture_mode_auto'), value: 'auto' },
++  { label: t('ui.devices.editor.posture_mode_desktop'), value: 'desktop' },
++  { label: t('ui.devices.editor.posture_mode_tablet'), value: 'tablet' },
++  { label: t('ui.devices.editor.posture_mode_handheld'), value: 'handheld' },
++]);
++
+ const hdrProfileOptions = computed(() => {
+   const profiles = [...props.hdrProfiles].sort(
+     (left, right) => Number(right.added_ms ?? 0) - Number(left.added_ms ?? 0),
+@@ -447,6 +456,39 @@ function applyDisplaySelection(selection: ClientDisplaySelection): void {
+             <span class="vs-sr-only">{{ t('ui.devices.editor.allow_sleep') }}</span>
+           </label>
+         </SettingRow>
++        <SettingRow
++          class="client-setting-row--switch"
++          :label="t('ui.devices.editor.touch_device')"
++          :description="t('ui.devices.editor.touch_device_description')"
++          :control-id="`${controlIdPrefix}-touch-device`"
++        >
++          <label class="vs-switch">
++            <input
++              :id="`${controlIdPrefix}-touch-device`"
++              v-model="draft.touchDevice"
++              type="checkbox"
++              :disabled="busy"
++            />
++            <span class="vs-switch__track" aria-hidden="true" />
++            <span class="vs-sr-only">{{ t('ui.devices.editor.touch_device') }}</span>
++          </label>
++        </SettingRow>
++        <SettingRow
++          :label="t('ui.devices.editor.posture_mode')"
++          :description="t('ui.devices.editor.posture_mode_description')"
++          :control-id="`${controlIdPrefix}-posture-mode`"
++        >
++          <select
++            :id="`${controlIdPrefix}-posture-mode`"
++            v-model="draft.postureMode"
++            class="vs-select"
++            :disabled="busy"
++          >
++            <option v-for="option in postureModeOptions" :key="option.value" :value="option.value">
++              {{ option.label }}
++            </option>
++          </select>
++        </SettingRow>
+         <SettingRow :label="t('pin.device_name')" :control-id="`${controlIdPrefix}-name`">
+           <input
+             :id="`${controlIdPrefix}-name`"
+diff --git a/src_assets/common/assets/web/config.html b/src_assets/common/assets/web/config.html
+index ac8ac53ca..1ec0a114d 100644
+--- a/src_assets/common/assets/web/config.html
++++ b/src_assets/common/assets/web/config.html
+@@ -166,6 +166,9 @@
+                 mouse: 'enabled',
+                 high_resolution_scrolling: 'enabled',
+                 native_pen_touch: 'enabled',
++                touch_tablet_mode: 'enabled',
++                handheld_mode: 'xbox_fullscreen',
++                touch_posture_diagonal_mm: 356,
+                 enable_input_only_mode: 'disabled',
+                 forward_rumble: 'enabled',
+                 keybindings: '[0x10,0xA0,0x11,0xA2,0x12,0xA4]', // todo: add this to UI
+diff --git a/src_assets/common/assets/web/configs/configFieldSchema.ts b/src_assets/common/assets/web/configs/configFieldSchema.ts
+index 3399c635c..629cc045d 100644
+--- a/src_assets/common/assets/web/configs/configFieldSchema.ts
++++ b/src_assets/common/assets/web/configs/configFieldSchema.ts
+@@ -76,6 +76,7 @@ const NUMBER_FIELD_OVERRIDES: Record<string, Partial<ConfigFieldDefinition>> = {
+   control_peer_timeout: { min: 0, max: 86399999, step: 1, placeholder: '0' },
+   max_bitrate: { min: 0, placeholder: '0' },
+   minimum_fps_target: { min: 0, max: 1000, placeholder: '20' },
++  touch_posture_diagonal_mm: { min: 100, max: 419, step: 1, placeholder: '356' },
+   rtx_hdr_contrast: { min: -100, max: 100, step: 1, placeholder: '0' },
+   rtx_hdr_saturation: { min: -100, max: 100, step: 1, placeholder: '0' },
+   rtx_hdr_sdr_brightness: { min: 0, max: 100, step: 1, placeholder: '0' },
+diff --git a/src_assets/common/assets/web/configs/settingsSchema.ts b/src_assets/common/assets/web/configs/settingsSchema.ts
+index af8a16ed8..7d489bb3c 100644
+--- a/src_assets/common/assets/web/configs/settingsSchema.ts
++++ b/src_assets/common/assets/web/configs/settingsSchema.ts
+@@ -236,6 +236,12 @@ const virtualLayoutOptions = [
+   ),
+ ];
+ 
++const handheldModeOptions = [
++  option('xbox_fullscreen', 'config.handheld_mode_xbox_fullscreen'),
++  option('tablet', 'config.handheld_mode_tablet'),
++  option('desktop', 'config.handheld_mode_desktop'),
++];
++
+ const virtualScaleOptions = [
+   option('-1', 'ui.settings.options.virtual_scale.recommended'),
+   option('0', 'ui.settings.options.virtual_scale.preserve'),
+@@ -907,6 +913,17 @@ export const settingsCategories: SettingsCategory[] = [
+           boolean('always_send_scancodes', { platform: 'windows' }),
+           boolean('high_resolution_scrolling'),
+           boolean('native_pen_touch', { platform: 'windows' }),
++          boolean('touch_tablet_mode', { platform: 'windows' }),
++          select('handheld_mode', handheldModeOptions, {
++            platform: 'windows',
++            visibleWhen: { key: 'touch_tablet_mode', notEquals: false },
++          }),
++          number('touch_posture_diagonal_mm', {
++            min: 100,
++            max: 419,
++            step: 1,
++            platform: 'windows',
++          }),
+         ],
+       },
+       {
+@@ -1233,6 +1250,9 @@ export const settingsDefaults: Record<string, unknown> = {
+   always_send_scancodes: true,
+   high_resolution_scrolling: true,
+   native_pen_touch: true,
++  touch_tablet_mode: true,
++  handheld_mode: 'xbox_fullscreen',
++  touch_posture_diagonal_mm: 356,
+   key_repeat_delay: 500,
+   key_repeat_frequency: 24.9,
+   install_steam_audio_drivers: true,
+diff --git a/src_assets/common/assets/web/public/assets/locale/en.json b/src_assets/common/assets/web/public/assets/locale/en.json
+index d7ee72b9a..579fa8030 100644
+--- a/src_assets/common/assets/web/public/assets/locale/en.json
++++ b/src_assets/common/assets/web/public/assets/locale/en.json
+@@ -820,6 +820,11 @@
+     "global_prep_cmd_desc": "Configure a list of commands to be executed before or after running any application. If any of the specified preparation commands fail, the application launch process will be aborted.",
+     "global_state_cmd": "State Commands",
+     "global_state_cmd_desc": "Configure a list of commands to be executed when any application changes state. These commands run alongside app-specific state commands.",
++    "handheld_mode": "Handheld clients",
++    "handheld_mode_desc": "Windows only. What a client that reports the handheld class gets. Xbox full screen experience (default): tablet mode plus the Xbox full screen experience (Xbox mode). Where Windows cannot enter it (older Windows build, or no Xbox app chosen as the home app under Settings > Gaming > Xbox mode), the client gets tablet mode. Tablet: tablet mode only, the Xbox full screen experience is never requested. Desktop: handheld clients are treated like keyboard-attached desktops. A client can override this with its own host mode. Has no effect when tablet mode for touch clients is off.",
++    "handheld_mode_desktop": "Desktop",
++    "handheld_mode_tablet": "Tablet",
++    "handheld_mode_xbox_fullscreen": "Xbox full screen experience (default)",
+     "hevc_mode": "HEVC Support",
+     "hevc_mode_0": "Vibepollo will advertise support for HEVC based on encoder capabilities (recommended)",
+     "hevc_mode_1": "Vibepollo will not advertise support for HEVC",
+@@ -1030,6 +1035,10 @@
+     "lid_close_ends_streams": "End streams when the lid closes",
+     "lid_close_ends_streams_desc": "macOS only. When a MacBook's lid closes, quit the running app, or end the stream if no app is running. Turn this off to keep streaming with the lid closed. That only works while the Mac stays awake, which is up to macOS (for example, on power with an external display) or another utility that keeps it awake. Vibepollo doesn't change power settings or keep the Mac awake itself, and it still ends streams when the Mac goes to sleep.",
+     "system_tray_desc_machine_host": "The Linux system service cannot display a tray icon or desktop notifications. Use the Web UI to manage the host. Your saved tray preference is kept for desktop launches.",
++    "touch_posture_diagonal_mm": "Touch client screen diagonal (mm)",
++    "touch_posture_diagonal_mm_desc": "Windows only. Physical diagonal in millimetres that the virtual display reports to Windows for touch-primary clients (phone, handheld, tablet, or a paired client marked as a touch device). The same size is used for every touch client, whatever its screen. Windows docks its touch keyboard only below about 17 inches, so the range is 100 to 419 (16.5 in). The default is 356 (14 in).",
++    "touch_tablet_mode": "Tablet mode for touch clients",
++    "touch_tablet_mode_desc": "Windows: report the host to Windows as a tablet (keyboard detached) while a touch-primary client streams, and as a laptop otherwise. Windows then shows its touch keyboard for text fields and uses its tablet taskbar. Clients that report a laptop or desktop posture keep the desktop behaviour, and a client reporting a keyboard being attached or detached switches the host live.",
+     "touchpad_as_ds4": "Emulate a DS4 gamepad if the client gamepad reports a touchpad is present",
+     "touchpad_as_ds4_desc": "If disabled, touchpad presence will not be taken into account during gamepad type selection.",
+     "upnp": "UPnP",
+diff --git a/src_assets/common/assets/web/public/assets/locale/ui/en.json b/src_assets/common/assets/web/public/assets/locale/ui/en.json
+index dcb4b6b68..4b65dd262 100644
+--- a/src_assets/common/assets/web/public/assets/locale/ui/en.json
++++ b/src_assets/common/assets/web/public/assets/locale/ui/en.json
+@@ -455,7 +455,15 @@
+         "title": "Edit device",
+         "use_common_value": "Use common setting: {value}",
+         "allow_sleep": "Allow this device to put the PC to sleep",
+-        "allow_sleep_description": "Separate permission for compatible clients and Windows hosts with native sleep support. Sleep requires every host application and stream to be closed. Disabled by default."
++        "allow_sleep_description": "Separate permission for compatible clients and Windows hosts with native sleep support. Sleep requires every host application and stream to be closed. Disabled by default.",
++        "touch_device": "Treat this device as a touch device",
++        "touch_device_description": "For clients that cannot report their posture. The virtual display is created with one fixed small physical size (14 in by default, see touch_posture_diagonal_mm), so Windows docks its touch keyboard instead of floating it. Clients that send a posture hint override this. Takes effect the next time the virtual display is created. Disabled by default.",
++        "posture_mode": "Host mode for this device",
++        "posture_mode_description": "Automatic follows what the device reports. Always desktop keeps the normal Windows desktop, always tablet uses Windows tablet mode, and always handheld uses tablet mode plus the Xbox full screen experience when the host allows it (see handheld_mode).",
++        "posture_mode_auto": "Automatic",
++        "posture_mode_desktop": "Always desktop",
++        "posture_mode_tablet": "Always tablet",
++        "posture_mode_handheld": "Always handheld"
+       },
+       "common_settings_title": "Common host settings unavailable",
+       "common_settings_unavailable": "The common host settings could not be loaded. Existing client overrides are preserved, but inherited values may be incomplete.",
+diff --git a/src_assets/common/assets/web/scripts/v2-parity.test.ts b/src_assets/common/assets/web/scripts/v2-parity.test.ts
+index e7a799f3f..62498d89d 100644
+--- a/src_assets/common/assets/web/scripts/v2-parity.test.ts
++++ b/src_assets/common/assets/web/scripts/v2-parity.test.ts
+@@ -179,6 +179,9 @@ test('Linux keeps common virtual-display policy and hides Windows display intern
+     'wgc_direct_encoder_input',
+     'always_send_scancodes',
+     'native_pen_touch',
++    'touch_tablet_mode',
++    'handheld_mode',
++    'touch_posture_diagonal_mm',
+     'install_steam_audio_drivers',
+   ]);
+ 
+diff --git a/src_assets/common/assets/web/views/DevicesView.vue b/src_assets/common/assets/web/views/DevicesView.vue
+index 8b464af35..72aeb65d4 100644
+--- a/src_assets/common/assets/web/views/DevicesView.vue
++++ b/src_assets/common/assets/web/views/DevicesView.vue
+@@ -32,6 +32,8 @@ interface PairedDevice {
+   uuid: string;
+   enabled: boolean;
+   allow_sleep?: boolean;
++  touch_device?: boolean;
++  posture_mode?: string;
+   connected: boolean;
+   perm?: number | string;
+   enable_legacy_ordering?: boolean;
+@@ -138,6 +140,11 @@ function stringValue(value: unknown): string {
+   return '';
+ }
+ 
++function normalizePostureMode(value: unknown): string {
++  const mode = stringValue(value).toLocaleLowerCase();
++  return ['desktop', 'tablet', 'handheld'].includes(mode) ? mode : 'auto';
++}
++
+ function booleanValue(value: unknown, fallback: boolean): boolean {
+   if (typeof value === 'boolean') return value;
+   if (typeof value === 'number') return value !== 0;
+@@ -182,6 +189,8 @@ function normalizeDevice(device: unknown, index: number): PairedDevice {
+     name: stringValue(raw.name),
+     enabled: booleanValue(raw.enabled, true),
+     allow_sleep: raw.allow_sleep === true,
++    touch_device: raw.touch_device === true,
++    posture_mode: normalizePostureMode(raw.posture_mode),
+     connected: booleanValue(raw.connected, false),
+     last_seen:
+       typeof raw.last_seen === 'number' || typeof raw.last_seen === 'string' ? raw.last_seen : null,
+@@ -387,6 +396,8 @@ function draftFromDevice(device: PairedDevice): ClientDeviceDraft {
+   return {
+     name: device.name,
+     allowSleep: device.allow_sleep === true,
++    touchDevice: device.touch_device === true,
++    postureMode: normalizePostureMode(device.posture_mode),
+     permissions: permissionMask(device),
+     enableLegacyOrdering: device.enable_legacy_ordering !== false,
+     allowClientCommands: device.allow_client_commands !== false,
+@@ -639,6 +650,8 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
+     uuid: device.uuid,
+     name: draft.name.trim(),
+     allow_sleep: draft.allowSleep,
++    touch_device: draft.touchDevice,
++    posture_mode: normalizePostureMode(draft.postureMode),
+     perm: draft.permissions & PERMISSION_ALL,
+     enable_legacy_ordering: draft.enableLegacyOrdering,
+     allow_client_commands: draft.allowClientCommands,
+@@ -672,6 +685,8 @@ function updatePayload(device: PairedDevice, draft: ClientDeviceDraft): Record<s
+ const draftScalarKeys = [
+   'name',
+   'allowSleep',
++  'touchDevice',
++  'postureMode',
+   'permissions',
+   'enableLegacyOrdering',
+   'allowClientCommands',

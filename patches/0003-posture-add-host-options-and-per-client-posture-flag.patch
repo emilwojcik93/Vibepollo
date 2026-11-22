@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: emilwojcik93 <adminit@adar.pl>
+Date: Sun, 22 Nov 2026 10:03:00 +0100
+Subject: [PATCH] posture: add host options and per-client posture flags
+
+Plumbing that the later patches read:
+
+- config: touch_posture_diagonal_mm (default 356, strict 100..419 parse with a
+  warning and fallback), touch_tablet_mode (default on) and handheld_mode
+  (tablet | xbox_fullscreen | desktop, default xbox_fullscreen);
+- paired client record: touch_device (a stock client that cannot send a posture
+  can be flagged) and posture_mode (auto, desktop, tablet, handheld), persisted
+  in sunshine_state.json only when not default, listed by /api/clients/list and
+  settable through /api/clients/update with validation;
+- launch session: carries the validated posture hints (client_posture), copied
+  into the RTSP snapshot.
+
+The options have no effect until the policy is wired into launch and resume.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ src/config.cpp     | 42 +++++++++++++++++++++++++++++
+ src/config.h       |  3 +++
+ src/confighttp.cpp | 27 ++++++++++++++++++-
+ src/crypto.h       |  3 +++
+ src/nvhttp.cpp     | 66 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/nvhttp.h       | 16 +++++++++++
+ src/rtsp.cpp       |  1 +
+ src/rtsp.h         |  4 +++
+ 8 files changed, 161 insertions(+), 1 deletion(-)
+
+diff --git a/src/config.cpp b/src/config.cpp
+index 07a7967ae..bb42346f7 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -53,6 +53,7 @@
+ #include "logging.h"
+ #include "nvhttp.h"
+ #include "platform/common.h"
++#include "posture_size.h"
+ #include "process.h"
+ #include "process_catalog.h"
+ #include "rtsp.h"
+@@ -977,6 +978,9 @@ namespace config {
+       false  // wayland_hdr_compatibility
+     },  // display_device
+ 
++    356,  // touch_posture_diagonal_mm (14 in; range 100-419)
++    true,  // touch_tablet_mode
++    "xbox_fullscreen",  // handheld_mode (tablet | xbox_fullscreen | desktop)
+     0,  // max_bitrate
+     20,  // minimum_fps_target (FPS; 0 uses the capture/encoder path fallback)
+     true,  // wgc_pacing_smoothing
+@@ -2062,6 +2066,44 @@ namespace config {
+     }
+     bool_f(vars, "dd_wa_dummy_plug_hdr10", video.dd.wa.dummy_plug_hdr10);
+ 
++    {
++      // Strict parse: digits only, 100..419 mm. Anything else keeps the default and says so.
++      std::string touch_posture_diagonal;
++      string_f(vars, "touch_posture_diagonal_mm", touch_posture_diagonal);
++      // Tolerate the quoting int_f accepts ("356") and surrounding blanks.
++      touch_posture_diagonal = boost::algorithm::trim_copy(touch_posture_diagonal);
++      if (touch_posture_diagonal.size() >= 2 && touch_posture_diagonal.front() == '"' && touch_posture_diagonal.back() == '"') {
++        touch_posture_diagonal = touch_posture_diagonal.substr(1, touch_posture_diagonal.size() - 2);
++      }
++      if (!touch_posture_diagonal.empty()) {
++        if (const auto parsed = posture::parse_touch_diagonal_mm(touch_posture_diagonal)) {
++          video.touch_posture_diagonal_mm = *parsed;
++        } else {
++          video.touch_posture_diagonal_mm = posture::default_touch_diagonal_mm;
++          BOOST_LOG(warning) << "config: touch_posture_diagonal_mm must be an integer from "sv << posture::min_touch_diagonal_mm
++                             << " to "sv << posture::max_touch_diagonal_mm << " mm, got ["sv << touch_posture_diagonal
++                             << "]; using the default "sv << posture::default_touch_diagonal_mm << " mm"sv;
++        }
++      }
++    }
++    bool_f(vars, "touch_tablet_mode", video.touch_tablet_mode);
++    {
++      std::string handheld_mode;
++      string_f(vars, "handheld_mode", handheld_mode);
++      handheld_mode = boost::algorithm::trim_copy(handheld_mode);
++      if (handheld_mode.size() >= 2 && handheld_mode.front() == '"' && handheld_mode.back() == '"') {
++        handheld_mode = handheld_mode.substr(1, handheld_mode.size() - 2);
++      }
++      if (!handheld_mode.empty()) {
++        if (posture::parse_handheld_policy(handheld_mode)) {
++          video.handheld_mode = handheld_mode;
++        } else {
++          video.handheld_mode = "xbox_fullscreen";
++          BOOST_LOG(warning) << "config: handheld_mode must be tablet, xbox_fullscreen or desktop, got ["sv << handheld_mode
++                             << "]; using the default tablet"sv;
++        }
++      }
++    }
+     int_f(vars, "max_bitrate", video.max_bitrate);
+     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
+ 
+diff --git a/src/config.h b/src/config.h
+index fd8f86d70..ec54194ce 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -259,6 +259,9 @@ namespace config {
+       bool wayland_hdr_compatibility;  ///< Opt in to native KDE/Wayland HDR launch environment compatibility for resolved HDR streams.
+     } dd;
+ 
++    int touch_posture_diagonal_mm;  ///< Fixed physical diagonal (mm) the virtual display reports for touch-primary clients. Range 100-419, default 356 (14 in).
++    bool touch_tablet_mode;  ///< Windows: report the host as a tablet (slate) to Windows while a touch-primary client streams, and as a laptop otherwise. Default on.
++    std::string handheld_mode;  ///< What a handheld client gets: `xbox_fullscreen` (default: tablet plus the Xbox full screen experience, tablet alone where Windows cannot enter it), `tablet` or `desktop`. Parsed with posture::parse_handheld_policy().
+     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
+     double minimum_fps_target;  ///< Idle-frame timing target in FPS. Default 20, range 0-1000; 0 uses the capture/encoder path fallback (see configuration docs).
+     bool wgc_pacing_smoothing;  ///< Smooth WGC delivered frame cadence under low-latency (Reflex) source caps by snapping the pacing-group re-anchor back onto the prior grid instead of the jittery arrival phase. Disable for byte-for-byte legacy pacing.
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+index 6e82e9149..dde7ccb15 100644
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -3073,9 +3073,26 @@ namespace confighttp {
+         bad_request(response, request, "allow_sleep must be a boolean");
+         return;
+       }
+-      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled"))) {
++      if (input_tree.contains("touch_device") && !input_tree["touch_device"].is_boolean()) {
++        bad_request(response, request, "touch_device must be a boolean");
++        return;
++      }
++      if (input_tree.contains("posture_mode") &&
++          (!input_tree["posture_mode"].is_string() || !posture::parse_client_override(input_tree["posture_mode"].get<std::string>()))) {
++        bad_request(response, request, "posture_mode must be one of auto, desktop, tablet, handheld");
++        return;
++      }
++      if (!has_extended_fields && (hdr_profile.has_value() || input_tree.contains("allow_sleep") || input_tree.contains("enabled") || input_tree.contains("touch_device") || input_tree.contains("posture_mode"))) {
+         bool updated = true;
+         if (hdr_profile.has_value()) updated = nvhttp::set_client_hdr_profile(uuid, *hdr_profile);
++        if (input_tree.contains("touch_device")) {
++          output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
++          updated = output_tree["touch_device_updated"].get<bool>() && updated;
++        }
++        if (input_tree.contains("posture_mode")) {
++          output_tree["posture_mode_updated"] = nvhttp::set_client_posture_mode(uuid, input_tree["posture_mode"].get<std::string>());
++          updated = output_tree["posture_mode_updated"].get<bool>() && updated;
++        }
+         if (input_tree.contains("allow_sleep")) {
+           output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
+           updated = output_tree["allow_sleep_updated"].get<bool>() && updated;
+@@ -3166,6 +3183,14 @@ namespace confighttp {
+         output_tree["allow_sleep_updated"] = nvhttp::set_client_sleep_allowed(uuid, input_tree["allow_sleep"].get<bool>());
+         updated = output_tree["allow_sleep_updated"].get<bool>() && updated;
+       }
++      if (input_tree.contains("touch_device")) {
++        output_tree["touch_device_updated"] = nvhttp::set_client_touch_device(uuid, input_tree["touch_device"].get<bool>());
++        updated = output_tree["touch_device_updated"].get<bool>() && updated;
++      }
++      if (input_tree.contains("posture_mode")) {
++        output_tree["posture_mode_updated"] = nvhttp::set_client_posture_mode(uuid, input_tree["posture_mode"].get<std::string>());
++        updated = output_tree["posture_mode_updated"].get<bool>() && updated;
++      }
+       if (input_tree.contains("enabled")) {
+         output_tree["enabled_updated"] = nvhttp::set_client_enabled(uuid, input_tree["enabled"].get<bool>());
+         updated = output_tree["enabled_updated"].get<bool>() && updated;
+diff --git a/src/crypto.h b/src/crypto.h
+index 6dc34bfda..39f584e30 100644
+--- a/src/crypto.h
++++ b/src/crypto.h
+@@ -119,6 +119,9 @@ namespace crypto {
+     bool prefer_10bit_sdr = false;
+     bool enabled = true; // Independent access toggle; never erases Apollo permissions.
+     bool allow_sleep = false; // Separate administrator opt-in, never inferred from PERM.
++    // Host-side hint for clients that cannot send a posture: report the fixed touch diagonal for the virtual display.
++    bool touch_device = false;
++    std::string posture_mode = "auto"; // Host mode for this client: auto, desktop, tablet, handheld.
+     std::optional<std::int64_t> last_seen;
+     std::unordered_map<std::string, std::string> config_overrides;
+   };
+diff --git a/src/nvhttp.cpp b/src/nvhttp.cpp
+index 087d94d47..9057a2493 100644
+--- a/src/nvhttp.cpp
++++ b/src/nvhttp.cpp
+@@ -2653,6 +2653,12 @@ namespace nvhttp {
+           named_cert_node["enable_legacy_ordering"] = named_cert_p->enable_legacy_ordering;
+           named_cert_node["allow_client_commands"] = named_cert_p->allow_client_commands;
+           named_cert_node["allow_sleep"] = named_cert_p->allow_sleep;
++          if (named_cert_p->touch_device) {
++            named_cert_node["touch_device"] = true;
++          }
++          if (named_cert_p->posture_mode != "auto") {
++            named_cert_node["posture_mode"] = named_cert_p->posture_mode;
++          }
+           named_cert_node["always_use_virtual_display"] = named_cert_p->always_use_virtual_display;
+           named_cert_node["requested_resolution_only"] = named_cert_p->requested_resolution_only;
+           if (named_cert_p->prefer_10bit_sdr) {
+@@ -2800,6 +2806,14 @@ namespace nvhttp {
+               named_cert_p->enable_legacy_ordering = util::get_non_string_json_value<bool>(el, "enable_legacy_ordering", true);
+               named_cert_p->allow_client_commands = util::get_non_string_json_value<bool>(el, "allow_client_commands", true);
+               named_cert_p->allow_sleep = el.contains("allow_sleep") && el["allow_sleep"].is_boolean() && el["allow_sleep"].get<bool>();
++              named_cert_p->touch_device = el.contains("touch_device") && el["touch_device"].is_boolean() && el["touch_device"].get<bool>();
++              named_cert_p->posture_mode = "auto";
++              if (el.contains("posture_mode") && el["posture_mode"].is_string()) {
++                const auto loaded_posture_mode = el["posture_mode"].get<std::string>();
++                if (posture::parse_client_override(loaded_posture_mode)) {
++                  named_cert_p->posture_mode = loaded_posture_mode;
++                }
++              }
+               named_cert_p->always_use_virtual_display = util::get_non_string_json_value<bool>(el, "always_use_virtual_display", false);
+               named_cert_p->requested_resolution_only = util::get_non_string_json_value<bool>(el, "requested_resolution_only", false);
+               named_cert_p->prefer_10bit_sdr =
+@@ -4783,6 +4797,8 @@ namespace nvhttp {
+         named_cert_node["enable_legacy_ordering"] = named_cert->enable_legacy_ordering;
+         named_cert_node["allow_client_commands"] = named_cert->allow_client_commands;
+         named_cert_node["allow_sleep"] = named_cert->allow_sleep;
++        named_cert_node["touch_device"] = named_cert->touch_device;
++        named_cert_node["posture_mode"] = named_cert->posture_mode;
+         named_cert_node["always_use_virtual_display"] = named_cert->always_use_virtual_display;
+         named_cert_node["requested_resolution_only"] = named_cert->requested_resolution_only;
+ #ifdef _WIN32
+@@ -8412,6 +8428,56 @@ namespace nvhttp {
+     return false;
+   }
+ 
++  bool set_client_touch_device(const std::string &uuid, bool touch_device) {
++    if (uuid.empty()) {
++      return false;
++    }
++
++    bool updated = false;
++    {
++      std::lock_guard<std::mutex> lock(client_mutex);
++      for (auto &named_cert : client_root.named_devices) {
++        if (named_cert->uuid != uuid) {
++          continue;
++        }
++
++        named_cert->touch_device = touch_device;
++        updated = true;
++        break;
++      }
++    }
++
++    if (updated) {
++      save_state();
++    }
++    return updated;
++  }
++
++  bool set_client_posture_mode(const std::string &uuid, const std::string &mode) {
++    if (uuid.empty() || !posture::parse_client_override(mode)) {
++      return false;
++    }
++
++    bool updated = false;
++    {
++      std::lock_guard<std::mutex> lock(client_mutex);
++      for (auto &named_cert : client_root.named_devices) {
++        if (named_cert->uuid != uuid) {
++          continue;
++        }
++
++        named_cert->posture_mode = mode;
++        updated = true;
++        break;
++      }
++    }
++
++    if (updated) {
++      save_state();
++    }
++    return updated;
++  }
++
+   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile) {
+     if (uuid.empty()) {
+       return false;
+diff --git a/src/nvhttp.h b/src/nvhttp.h
+index f9368219e..02aa45712 100644
+--- a/src/nvhttp.h
++++ b/src/nvhttp.h
+@@ -350,6 +350,22 @@ namespace nvhttp {
+ 
+   bool set_client_hdr_profile(const std::string &uuid, const std::string &hdr_profile);
+ 
++  /**
++   * @brief Persist the per-client "touch device" flag.
++   *
++   * A flagged client that sends no posture hint gets the fixed touch diagonal (`touch_posture_diagonal_mm`).
++   * @return True if the client was found and updated.
++   */
++  bool set_client_touch_device(const std::string &uuid, bool touch_device);
++
++  /**
++   * @brief Persist the per-client host mode override.
++   *
++   * `auto` follows the client's own posture hints; `desktop`, `tablet` and `handheld` force that host mode.
++   * @return True if the client was found and updated; false for an unknown mode word or an unknown client.
++   */
++  bool set_client_posture_mode(const std::string &uuid, const std::string &mode);
++
+   /**
+    * @brief Remove all paired clients.
+    * @return True only when the cleared machine pairing state was persisted.
+diff --git a/src/rtsp.cpp b/src/rtsp.cpp
+index b208ed4fb..62b29f094 100644
+--- a/src/rtsp.cpp
++++ b/src/rtsp.cpp
+@@ -234,6 +234,7 @@ namespace rtsp_stream {
+     snapshot->force_sdr = force_sdr;
+     snapshot->client_vrr_requested = client_vrr_requested;
+     snapshot->perm = perm;
++    snapshot->client_posture = client_posture;
+     snapshot->fps = fps;
+     // Copied, not moved: the io_context thread still owns the original session.
+     // stream::session::alloc() moves these out of the clone on the startup worker.
+diff --git a/src/rtsp.h b/src/rtsp.h
+index 1c18421d3..c5dc9bbe2 100644
+--- a/src/rtsp.h
++++ b/src/rtsp.h
+@@ -8,6 +8,7 @@
+ #include "config.h"
+ #include "framegen_policy.h"
+ #include "hdr_stream_policy.h"
++#include "posture_size.h"
+ #include "remote_session.h"
+ 
+ #include <array>
+@@ -122,6 +123,9 @@ namespace rtsp_stream {
+     // Moonlight's VRR request passed its launch-time VSync, display-refresh,
+     // and adaptive-headroom checks. The renderer may still fall back later.
+     bool client_vrr_requested = false;
++    // Validated clientPosture/clientTouch/clientDiagonalMm/clientDpi launch arguments plus the
++    // paired-client touch device flag. Empty hints keep the display size exactly as before.
++    posture::hints_t client_posture;
+     bool requested_resolution_only = false;
+     std::string virtual_display_catalog_error;
+     bool client_display_mode_override;

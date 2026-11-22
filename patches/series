@@ -1,0 +1,13 @@
+# Ordered patch series for Vibepollo posture. One patch file name per line.
+# Blank lines and lines starting with '#' are ignored. Order matters: each patch builds on the previous one.
+# Regenerate with tools/export-series.sh, never edit the .patch files by hand.
+0001-posture-add-the-touch-virtual-display-size-policy.patch
+0002-posture-track-per-client-posture-state-and-display-s.patch
+0003-posture-add-host-options-and-per-client-posture-flag.patch
+0004-posture-report-laptop-slate-to-Windows-and-add-handh.patch
+0005-nvhttp-accept-client-posture-on-launch-and-resume-ad.patch
+0006-virtual-display-hand-the-posture-size-to-the-driver-.patch
+0007-web-ui-expose-the-posture-settings.patch
+0008-docs-document-touch-posture-and-add-a-tablet-switch-.patch
+# Cosmetic, unrelated to posture: kept only so the result is tree-identical to the reference branch (see its commit message).
+0009-tools-drop-a-stray-blank-line-in-CMakeLists.txt.patch
