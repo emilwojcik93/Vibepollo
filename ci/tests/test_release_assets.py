@@ -70,7 +70,13 @@ def make_dist_inputs(tmp_path, extra_build=None, msi_count=1):
     b.mkdir(parents=True)
     m.mkdir(parents=True)
     (b / "VibepolloSetup.exe").write_bytes(b"MZ-installer")
-    (b / "release-provenance.json").write_text(json.dumps({"schema_version": 1}))
+    import hashlib
+    inst = b"MZ-installer"
+    msi = b"msi-bytes"
+    (b / "release-provenance.json").write_text(json.dumps({
+        "schema_version": 1, "assets": {"VibepolloSetup.exe": hashlib.sha256(inst).hexdigest()},
+        "embedded_msi": {"verified": True, "sha256": hashlib.sha256(msi).hexdigest(),
+                         "msi_product_version": "2.20.101.0"}}))
     for name in (extra_build or []):
         (b / name).write_bytes(b"x")
     for i in range(msi_count):
@@ -133,6 +139,21 @@ def test_stage_rejects_unexpected_files_and_msi_counts(tmp_path):
     (b4 / "release-provenance.json").write_text('{"k": "-----BEGIN RSA PRIVATE KEY-----"}')
     with pytest.raises(v.ValidationError):
         st.stage(str(b4), str(m4), str(tmp_path / "d4"), True)
+
+
+def test_stage_cross_checks_upstream_provenance(tmp_path):
+    b, m = make_dist_inputs(tmp_path)
+    st.stage(str(b), str(m), str(tmp_path / "ok"), True, "2.20.101.0")
+    with pytest.raises(v.ValidationError):  # wrong expected ProductVersion
+        st.stage(str(b), str(m), str(tmp_path / "bad1"), True, "2.20.90.0")
+    b2, m2 = make_dist_inputs(tmp_path / "x")
+    (b2 / "VibepolloSetup.exe").write_bytes(b"tampered")
+    with pytest.raises(v.ValidationError):  # installer hash differs from provenance
+        st.stage(str(b2), str(m2), str(tmp_path / "bad2"), True)
+    b3, m3 = make_dist_inputs(tmp_path / "y")
+    (m3 / "Vibepollo-2.20.1-alpha.1-0.msi").write_bytes(b"other-msi")
+    with pytest.raises(v.ValidationError):  # embedded MSI differs from standalone MSI
+        st.stage(str(b3), str(m3), str(tmp_path / "bad3"), True)
 
 
 def test_stage_rejects_symlink(tmp_path):

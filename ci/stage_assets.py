@@ -41,7 +41,8 @@ def _regular_files(directory: str) -> List[str]:
     return sorted(out)
 
 
-def stage(build_dir: str, msi_dir: str, dist: str, require_msi: bool) -> List[str]:
+def stage(build_dir: str, msi_dir: str, dist: str, require_msi: bool,
+          expected_msi_version: str = "") -> List[str]:
     os.makedirs(dist, exist_ok=True)
     build_files = _regular_files(build_dir)
     allowed = {INSTALLER, PROVENANCE}
@@ -73,7 +74,44 @@ def stage(build_dir: str, msi_dir: str, dist: str, require_msi: bool) -> List[st
             staged.append(MSI_ASSET)
     elif require_msi:
         raise v.ValidationError("MSI artifact missing")
+    verify_provenance(dist, expected_msi_version)
     return staged
+
+
+def verify_provenance(dist: str, expected_msi_version: str = "") -> None:
+    """Cross-check upstream's release-provenance.json against the staged files.
+
+    Observed format (trial run 45049044547): ``assets`` maps file name -> sha256 and
+    ``embedded_msi`` records sha256 / msi_product_version of the MSI embedded in the
+    bootstrapper (equal to the standalone ``unsigned-msi-package`` MSI).
+    """
+    path = os.path.join(dist, PROVENANCE)
+    if not os.path.isfile(path):
+        return
+    import hashlib
+
+    def sha(name: str) -> str:
+        h = hashlib.sha256()
+        with open(os.path.join(dist, name), "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    with open(path, "r", encoding="utf-8") as fh:
+        prov = json.load(fh)
+    if not isinstance(prov, dict):
+        raise v.ValidationError("provenance is not an object")
+    assets = prov.get("assets")
+    if not isinstance(assets, dict) or assets.get(INSTALLER) != sha(INSTALLER):
+        raise v.ValidationError("provenance does not match the installer hash")
+    emb = prov.get("embedded_msi")
+    if isinstance(emb, dict):
+        if os.path.isfile(os.path.join(dist, MSI_ASSET)) and emb.get("sha256") != sha(MSI_ASSET):
+            raise v.ValidationError("embedded MSI differs from the staged MSI")
+        if emb.get("verified") is not True:
+            raise v.ValidationError("upstream did not verify the embedded MSI")
+        if expected_msi_version and emb.get("msi_product_version") != expected_msi_version:
+            raise v.ValidationError("embedded MSI ProductVersion differs from the expected version")
 
 
 def find_msi(msi_dir: str) -> str:
@@ -89,13 +127,14 @@ def main(argv=None) -> int:
     ap.add_argument("--msi-dir", required=True)
     ap.add_argument("--dist", required=True)
     ap.add_argument("--require-msi", action="store_true")
+    ap.add_argument("--expect-msi-version", default="")
     ap.add_argument("--print-msi", action="store_true", help="only print the MSI path (package job)")
     args = ap.parse_args(argv)
     try:
         if args.print_msi:
             print(find_msi(args.msi_dir))
             return 0
-        staged = stage(args.build_dir, args.msi_dir, args.dist, args.require_msi)
+        staged = stage(args.build_dir, args.msi_dir, args.dist, args.require_msi, args.expect_msi_version)
     except (v.ValidationError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         return v.fail(f"stage_assets: {type(exc).__name__}: {str(exc)[:200]}")
     print("staged: " + ", ".join(staged))

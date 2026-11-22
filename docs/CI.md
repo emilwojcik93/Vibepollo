@@ -152,7 +152,7 @@ done for this fork) and, when the secret `GCHAT_WEBHOOK_URL` exists, post a sani
 | Checkout incl. recursive submodules | 177-187 s | no safe cache; shallow already |
 | setup-msys2 (cache: true) | 121-129 s | already cached by upstream |
 | setup-node npm | ~10 s | already cached |
-| Packaging jobs (package_windows, finalize) | measured in the trial (see section 8) | required for the bootstrapper |
+| Packaging jobs (Package Windows + Finalize, bootstrapper) | 23 s + 33 s | negligible; no action |
 | Artifact retention | 7 days for everything we upload; upstream's hard-coded installer-stage artifact: 1 day | set in wrapper; repo-wide log retention can also be reduced in Settings |
 
 * **Actions caches are branch-scoped**: a cache written by a run on `build/X-n1` cannot be restored by `build/X-n2` (only
@@ -184,6 +184,23 @@ See section 9 of the engineer's report; summarized:
    `ENFORCE_SENSITIVE_GATE=true`). Optional secret `GCHAT_WEBHOOK_URL`.
 5. Rulesets (see report), "Require actions to be pinned to a full-length commit SHA", Dependabot alerts.
 
-## 8. Trial result (unknown U1: secret-free `build_only=false` path)
+## 8. Trial result (unknown U1: secret-free `build_only=false` path) - RESOLVED: works
 
-See the engineer's report for the trial run record (filled in after the run finished).
+Branch `ci-trial/2.20.0-n0` (upstream 2.20.0 + the reference posture tree + wrapper), run 45049044547 (push trigger,
+dry run, tests ON), 17:22:05Z -> 18:13:53Z (51.8 min):
+
+| Job | Result | Time |
+|---|---|---|
+| validate | success | 8 s |
+| build -> Windows (compile, tests, MSI) | success | 48.9 min (2936 s) |
+| build -> Select / Sign MSI (noop) / Package Windows / Sign installer (noop) / Finalize | success | 23 s + 33 s |
+| package (msiinfo gate) | ProductVersion gate and msiinfo parsing OK; failed later on `manifest_gen` (`bad source_ref`: regex did not accept the `ci-trial/` ref) - fixed, verified locally on the real artifacts | 42 s |
+| publish / notify | skipped (dry run) | - |
+
+Facts learned: no secret is needed; artifacts `build-Windows` = {`VibepolloSetup.exe` 47.9 MB, `release-provenance.json`},
+`unsigned-msi-package-Windows` = {`Vibepollo.msi` 47.5 MB} (the MSI is already named `Vibepollo.msi`); the MSI embedded in the
+bootstrapper is byte-identical to that standalone MSI; `release-provenance.json` carries `assets`, `embedded_msi.sha256`,
+`embedded_msi.msi_product_version` (`2.20.101.0`, `setup_file_version 2.20.101.501`); `stage_assets.py` cross-checks all of
+them. `permissions: {}` is sufficient for artifact download in the package job. Retention 7 days confirmed.
+The publish job (attest, release, verify) cannot be exercised in a dry run and is **untested on a real release**: the
+first real release (T-2.10) must be watched.

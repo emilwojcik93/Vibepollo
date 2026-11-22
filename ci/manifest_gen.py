@@ -142,7 +142,7 @@ def validate_manifest(m: Dict[str, Any]) -> None:
     v.require(v.RUN_ID_RE, str(b["run_id"]), "run id")
     if b["workflow"] != WORKFLOW:
         raise v.ValidationError("bad workflow path")
-    if not re.fullmatch(r"refs/heads/build/[0-9.]+-n[0-9]{1,3}", b["source_ref"]):
+    if not re.fullmatch(r"refs/heads/(build|ci-trial)/[0-9.]+-n[0-9]{1,3}", b["source_ref"]):
         raise v.ValidationError("bad source_ref")
     v.sha1(b["source_sha"], "source sha")
     p = m["patches"]

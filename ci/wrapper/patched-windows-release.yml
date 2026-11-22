@@ -173,7 +173,7 @@ jobs:
           GROUPS_CSV: ${{ needs.validate.outputs.patch_groups }}
         run: |
           set -euo pipefail
-          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist preview --require-msi
+          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist preview --require-msi --expect-msi-version "$MSI_VERSION"
           python3 .vp-ci/manifest_gen.py generate --dist preview --tag "$TAG" --upstream-tag "$UP_TAG" \
             --upstream-commit "$UP_COMMIT" --release-id "$RELEASE_ID" --n "$N" \
             --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
@@ -282,7 +282,7 @@ jobs:
           GROUPS_CSV: ${{ needs.validate.outputs.patch_groups }}
         run: |
           set -euo pipefail
-          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist dist --require-msi
+          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist dist --require-msi --expect-msi-version "$MSI_VERSION"
           python3 .vp-ci/manifest_gen.py generate --dist dist --tag "$TAG" --upstream-tag "$UP_TAG" \
             --upstream-commit "$UP_COMMIT" --release-id "$RELEASE_ID" --n "$N" \
             --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
