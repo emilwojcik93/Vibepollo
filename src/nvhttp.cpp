@@ -1585,6 +1585,23 @@ namespace nvhttp {
       };
     }
 
+    // A resume whose posture crosses the touch size boundary (none versus some size) cannot keep a
+    // display created with the other size, so the display is recreated before streaming resumes.
+    // Shared displays are never recreated for one client. Unknown history, or a change between two
+    // touch classes, keeps the display.
+    bool posture_requires_display_recreation(
+      const rtsp_stream::launch_session_t &launch_session,
+      const GUID &display_guid,
+      bool shared_display
+    ) {
+      if (shared_display) {
+        return false;
+      }
+      posture::display_key_t display_key {};
+      std::memcpy(display_key.data(), &display_guid, display_key.size());
+      return posture::display_crosses_boundary(posture::applied_size(display_key), launch_session.client_posture);
+    }
+
     void prepare_virtual_display_for_session(
       const std::shared_ptr<rtsp_stream::launch_session_t> &launch_session,
       audio::display_change_hold_t &request_audio_hold,
@@ -1851,10 +1868,12 @@ namespace nvhttp {
                   launch_session->client_name,
                   VDISPLAY::policy::allow_generic_resume_fallback()
                 )) {
-            if (VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(
-                  virtual_display_stable_guid,
-                  "RTSP resume virtual display reuse"
-                )) {
+            const bool posture_boundary_crossed =
+              posture_requires_display_recreation(*launch_session, virtual_display_stable_guid, shared_virtual_display_mode);
+            if (posture_boundary_crossed) {
+              BOOST_LOG(info) << "Posture: resume crosses the touch size boundary; recreating the virtual display with the new size.";
+            }
+            if (!posture_boundary_crossed && VDISPLAY::configuredRenderAdapterMatchesVirtualDisplay(virtual_display_stable_guid, "RTSP resume virtual display reuse")) {
               launch_session->virtual_display = true;
               launch_session->virtual_display_failed = false;
               launch_session->virtual_display_device_id = *existing_device;
@@ -1890,7 +1909,9 @@ namespace nvhttp {
             launch_session->virtual_display_device_id.clear();
             launch_session->virtual_display_ready_since.reset();
             launch_session->virtual_display_hdr_enabled.reset();
-            BOOST_LOG(warning) << "Display helper: existing resume virtual display is on a different or unknown adapter; recreating it on demand.";
+            if (!posture_boundary_crossed) {
+              BOOST_LOG(warning) << "Display helper: existing resume virtual display is on a different or unknown adapter; recreating it on demand.";
+            }
           }
 
           BOOST_LOG(info) << "Display helper: resume requested virtual display capture but no reusable virtual display was found;"
@@ -2096,6 +2117,20 @@ namespace nvhttp {
             }
           }
           VDISPLAY::setWatchdogFeedingEnabled(true);
+          // Posture size policy: the display backend reads this by GUID when it creates the display.
+          // An empty result leaves the driver's default size, exactly as before.
+          posture::display_key_t posture_display_key {};
+          std::memcpy(posture_display_key.data(), &virtual_display_guid, posture_display_key.size());
+          posture::set_desired_size(
+            posture_display_key,
+            posture::derive_physical_size(
+              launch_session->client_posture,
+              static_cast<int>(recovery_params.width),
+              static_cast<int>(recovery_params.height),
+              config::video.touch_posture_diagonal_mm
+            ),
+            launch_session->client_uuid
+          );
           const char *hdr_profile = launch_session->hdr_profile ? launch_session->hdr_profile->c_str() : nullptr;
           auto display_info = VDISPLAY::createVirtualDisplay(
             display_uuid_source.c_str(),
