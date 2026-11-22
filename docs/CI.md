@@ -149,6 +149,23 @@ metadata disagrees with the version mapper. Unit tests cover all 87 values of N 
 * Untrusted binary parsing (msiinfo on the upstream-built MSI) runs only in the unprivileged `package` job; its JSON
   summary is size-limited, ASCII-sanitized and re-validated in the publish job before it is embedded in the manifest.
 
+### Push credential for `build/*` branches: App token OR deploy key (and the manual path)
+The `prepare` job needs ONE credential that may create branches containing workflow files:
+* GitHub App: variable `PUSH_APP_ID` + secret `PUSH_APP_PRIVATE_KEY` (Contents RW, Workflows RW, this repo only), or
+* a write **deploy key** of this repository: secret `PUSH_DEPLOY_KEY` (the SSH private key). The job writes it with mode 600
+  to `$RUNNER_TEMP`, pushes with `IdentitiesOnly=yes`, `StrictHostKeyChecking=yes` and a `known_hosts` built from
+  `gh api meta --jq .ssh_keys` (TLS), and always removes the files afterwards.
+Both live in environment `build-push` (deployment branch `automation` only). If both exist the App is used. If neither is
+configured the job fails with an explicit message; there is no fallback to `GITHUB_TOKEN`.
+
+**First release / manual path (break glass):** run `tools/prepare-build-branch.sh` (or `python ci/prepare_build_branch.py`) on
+the operator machine from a clean checkout of `automation`. It does exactly what `prepare` does (newest eligible upstream
+release or `--tag`, validation, tag dereference, moved-tag pins, plan, apply the series, strip upstream workflows, check that
+`ci-windows.yml` is `workflow_call` only, assemble the wrapper) and then records `upstream-seen.json` (local commit), pushes
+that commit to `automation` and pushes `build/<tag>-nN` with the operator's own git credentials (ssh remote `fork`). Only those
+two `git push` calls need credentials; the GitHub API reads are anonymous. `--dry-run` prints the branch name, tip and tree hash
+and stops before touching anything. Subsequent automation needs credential X (App token or deploy key, both supported).
+
 ## 5. Operations
 
 | Task | How |
