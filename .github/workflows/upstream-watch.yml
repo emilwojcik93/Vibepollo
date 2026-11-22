@@ -143,7 +143,7 @@ jobs:
           set -euo pipefail
           hold=false
           if [ "$HOLD_POLICY" = "true" ] || [ "$HOLD_VAR" = "true" ]; then hold=true; fi
-          python3 ci/plan_build.py --tag "$TAG" --commit "$COMMIT" --lock upstream.lock \
+          python3 ci/plan_build.py --tag "$TAG" --commit "$COMMIT" --lock upstream-seen.json \
             --our-releases our-releases.json --runs runs.json --series-sha "$SERIES_SHA" \
             --hold "$hold" --override-hold "${OVERRIDE_HOLD:-false}" --force-rebuild "${FORCE:-false}" \
             --manual-tag "$MANUAL" --github-output
@@ -174,7 +174,7 @@ jobs:
     # the environment to the automation branch so build/* branches can never read it.
     environment: build-push
     permissions:
-      contents: write   # records upstream.lock on automation (GITHUB_TOKEN); branch push uses the App token
+      contents: write   # records upstream-seen.json on automation (GITHUB_TOKEN); branch push uses the App token
     env:
       TAG: ${{ needs.resolve.outputs.tag }}
       COMMIT: ${{ needs.resolve.outputs.commit }}
@@ -287,7 +287,7 @@ jobs:
           python3 auto/ci/validate_tag.py sha1 "$tip"
           echo "tip=$tip" >> "$GITHUB_OUTPUT"
           echo "### Build branch \`build/${TAG}-n${N}\` assembled at \`${tip}\` (dry run: ${DRY_RUN})" >> "$GITHUB_STEP_SUMMARY"
-      - name: Record the upstream pin and the build in upstream.lock (local commit)
+      - name: Record the upstream pin and the build in upstream-seen.json (local commit)
         if: env.DRY_RUN != 'true'
         env:
           TIP: ${{ steps.assemble.outputs.tip }}
@@ -296,14 +296,14 @@ jobs:
           cd auto
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if [ "$RECORD_LOCK" = "true" ]; then
-            python3 ci/lock_update.py record --lock upstream.lock --repo "$UP_REPO" --tag "$TAG" --commit "$COMMIT" \
+            python3 ci/lock_update.py record --lock upstream-seen.json --repo "$UP_REPO" --tag "$TAG" --commit "$COMMIT" \
               --release-id "$RELEASE_ID" --published-at "$PUBLISHED_AT" --now "$now"
           fi
-          python3 ci/lock_update.py add-build --lock upstream.lock --tag "$TAG" --n "$N" --series-sha "$SERIES_SHA" \
+          python3 ci/lock_update.py add-build --lock upstream-seen.json --tag "$TAG" --n "$N" --series-sha "$SERIES_SHA" \
             --source-sha "$TIP"
           git config user.name "vp-automation"
           git config user.email "vp-automation@users.noreply.github.com"
-          git add upstream.lock
+          git add upstream-seen.json
           git commit -q -m "lock: pin upstream ${TAG} and record build n${N}"
       - name: Push the build branch (App token; triggers patched-windows-release.yml)
         if: env.DRY_RUN != 'true'
@@ -335,7 +335,7 @@ jobs:
             git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
               pull -q --rebase "https://github.com/${REPO}.git" automation
           done
-          echo "::error::could not push upstream.lock (is the automation ruleset blocking github-actions?)"
+          echo "::error::could not push upstream-seen.json (is the automation ruleset blocking github-actions?)"
           exit 1
 
   rerun:

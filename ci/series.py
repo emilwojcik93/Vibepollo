@@ -6,15 +6,10 @@ relative to the ``patches/`` directory; blank lines and ``#`` comments are
 ignored.  An optional ``# group: NAME`` comment assigns the following entries to
 a logical group (default group: ``posture``).
 
-``series_sha256`` is the SHA-256 over the canonical text
-
-    <sha256(series file)>  series
-    <sha256(patch 1)>  <relative path 1>
-    ...
-
-(one line each, ``\\n`` terminated), i.e. it covers the order *and* the content
-of every patch: a changed patch body changes the fingerprint, unlike a hash of
-the series file alone.
+``series_sha256`` follows the Patch Engineer's single definition (tools/series-sha.sh):
+SHA-256 over the bytes of ``patches/series`` with CR removed, followed by the raw
+bytes of every listed patch file in series order.  It therefore covers the order
+*and* the content of every patch.
 """
 from __future__ import annotations
 
@@ -62,7 +57,9 @@ def parse(series_path: str) -> List[Tuple[str, str]]:
 
 def fingerprint(series_path: str, patches_dir: str) -> Dict[str, object]:
     entries = parse(series_path)
-    lines = [f"{_sha256_file(series_path)}  series\n"]
+    h = hashlib.sha256()
+    with open(series_path, "rb") as fh:
+        h.update(fh.read().replace(bytes([13]), b""))
     root = os.path.realpath(patches_dir)
     for name, _ in entries:
         full = os.path.join(patches_dir, name)
@@ -70,8 +67,9 @@ def fingerprint(series_path: str, patches_dir: str) -> Dict[str, object]:
             raise v.ValidationError("patch resolves outside the patches directory")
         if not os.path.isfile(full):
             raise v.ValidationError(f"patch listed in series is missing: {name}")
-        lines.append(f"{_sha256_file(full)}  {name}\n")
-    digest = hashlib.sha256("".join(lines).encode("ascii")).hexdigest()
+        with open(full, "rb") as fh:
+            h.update(fh.read())
+    digest = h.hexdigest()
     groups: List[str] = []
     for _, g in entries:
         if g not in groups:

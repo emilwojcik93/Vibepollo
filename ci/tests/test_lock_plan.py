@@ -38,7 +38,7 @@ def plan(lock, **kw):
 # --- lock ---------------------------------------------------------------------------
 
 def test_lock_record_new_then_same(tmp_path):
-    p = tmp_path / "upstream.lock"
+    p = tmp_path / "upstream-seen.json"
     lock = lu.load(str(p))  # absent file
     assert lu.record(lock, "2.20.0", C1, 200, TS, TS) == "new"
     lu.save(lock, str(p))

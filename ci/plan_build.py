@@ -6,14 +6,14 @@ Pure function of its inputs (all validated), so every branch is unit-tested.
 Actions
 -------
 ``hold``      policy.yml ``hold: true`` or repo variable HOLD=true (and no override)
-``halt``      upstream tag moved vs ``upstream.lock`` (or build counter exhausted)
+``halt``      upstream tag moved vs ``upstream-seen.json`` (or build counter exhausted)
 ``noop``      already built / build in flight / retries exhausted / older than latest seen
 ``build``     create ``build/<tag>-n<N>`` and let its push start the wrapper
 ``rerun``     an earlier attempt for the same series failed: re-run the failed run
 
 Inputs
 ------
-lock          parsed ``upstream.lock`` (see lock_update.py)
+lock          parsed ``upstream-seen.json`` (see lock_update.py)
 our_releases  JSON array from ``GET /repos/<fork>/releases`` (drafts included)
 runs          JSON array from ``gh run list --workflow patched-windows-release.yml
               --json databaseId,headBranch,status,conclusion``
@@ -57,7 +57,8 @@ def _runs_for(runs: Any, branch: str) -> List[Dict[str, Any]]:
 
 def plan(*, tag: str, commit: str, lock: Dict[str, Any], our_releases: Any, runs: Any,
          series_sha: str, hold: bool = False, override_hold: bool = False,
-         force_rebuild: bool = False, manual_tag: bool = False) -> Dict[str, Any]:
+         force_rebuild: bool = False, manual_tag: bool = False,
+         pin: Any = None) -> Dict[str, Any]:
     v.upstream_tag(tag)
     v.sha1(commit)
     v.sha256(series_sha, "series sha")
@@ -68,9 +69,13 @@ def plan(*, tag: str, commit: str, lock: Dict[str, Any], our_releases: Any, runs
         result.update(action="hold", reason="hold is set (policy.yml or HOLD variable)")
         return result
 
+    if pin is not None and pin[0] == tag and pin[1] != commit:
+        result.update(action="halt", reason="upstream tag moved relative to the pinned upstream.lock")
+        return result
+
     entry = lock["entries"].get(tag)
     if entry is not None and entry["commit"] != commit:
-        result.update(action="halt", reason="upstream tag moved relative to upstream.lock")
+        result.update(action="halt", reason="upstream tag moved relative to upstream-seen.json")
         return result
 
     if not manual_tag:
@@ -84,7 +89,7 @@ def plan(*, tag: str, commit: str, lock: Dict[str, Any], our_releases: Any, runs
     result["record_lock"] = entry is None
 
     if entry is None and published and not force_rebuild:
-        result.update(reason="a release for this upstream tag exists but upstream.lock has no entry")
+        result.update(reason="a release for this upstream tag exists but upstream-seen.json has no entry")
         return result
 
     same = [b for b in builds if b["series_sha256"] == series_sha]
@@ -142,10 +147,12 @@ def main(argv=None) -> int:
     ap.add_argument("--override-hold", default="false")
     ap.add_argument("--force-rebuild", default="false")
     ap.add_argument("--manual-tag", default="false")
+    ap.add_argument("--pin-file", default="", help="Patch Engineer's upstream.lock (reference pin)")
     ap.add_argument("--github-output", action="store_true")
     args = ap.parse_args(argv)
     try:
         lock = lock_update.load(args.lock)
+        pin = lock_update.reference_pin(args.pin_file)
         with open(args.our_releases, "r", encoding="utf-8") as fh:
             rels = json.load(fh)
         with open(args.runs, "r", encoding="utf-8") as fh:
@@ -153,7 +160,7 @@ def main(argv=None) -> int:
         res = plan(tag=args.tag, commit=args.commit, lock=lock, our_releases=rels, runs=runs,
                    series_sha=args.series_sha, hold=_bool(args.hold),
                    override_hold=_bool(args.override_hold), force_rebuild=_bool(args.force_rebuild),
-                   manual_tag=_bool(args.manual_tag))
+                   manual_tag=_bool(args.manual_tag), pin=pin)
     except (v.ValidationError, OSError, json.JSONDecodeError) as exc:
         return v.fail(f"plan_build: {exc}")
     print(json.dumps(res, sort_keys=True))

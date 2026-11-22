@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""``upstream.lock`` reader / updater (PLAN R-TRK-3).
+"""``upstream-seen.json`` reader / updater (PLAN R-TRK-3).
 
 Format (JSON, schema 1; an absent or empty file means "nothing seen yet")::
 
@@ -49,24 +49,24 @@ def empty(repo: str = "Nonary/Vibepollo") -> Dict[str, Any]:
 
 def validate(lock: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(lock, dict) or lock.get("schema") != 1:
-        raise v.ValidationError("upstream.lock: unsupported schema")
+        raise v.ValidationError("upstream-seen.json: unsupported schema")
     v.require(v.REPO_SLUG_RE, lock.get("upstream"), "lock upstream")
     entries = lock.get("entries")
     if not isinstance(entries, dict):
-        raise v.ValidationError("upstream.lock: entries must be an object")
+        raise v.ValidationError("upstream-seen.json: entries must be an object")
     for tag, ent in entries.items():
         v.upstream_tag(tag)
         if not isinstance(ent, dict):
-            raise v.ValidationError("upstream.lock: bad entry")
+            raise v.ValidationError("upstream-seen.json: bad entry")
         v.sha1(ent.get("commit"), "lock commit")
         if not isinstance(ent.get("release_id"), int):
-            raise v.ValidationError("upstream.lock: release_id must be an integer")
+            raise v.ValidationError("upstream-seen.json: release_id must be an integer")
         builds = ent.get("builds", [])
         if not isinstance(builds, list):
-            raise v.ValidationError("upstream.lock: builds must be a list")
+            raise v.ValidationError("upstream-seen.json: builds must be a list")
         for b in builds:
             if not isinstance(b, dict) or not isinstance(b.get("n"), int):
-                raise v.ValidationError("upstream.lock: bad build record")
+                raise v.ValidationError("upstream-seen.json: bad build record")
             v.sha256(b.get("series_sha256"), "lock series sha")
             v.sha1(b.get("source_sha"), "lock source sha")
     return lock
@@ -95,6 +95,34 @@ def save(lock: Dict[str, Any], path: str) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def reference_pin(path: str):
+    """Read the Patch Engineer's ``upstream.lock`` (YAML-ish) and return ``(tag, commit)`` or None.
+
+    Only the two scalar keys under ``upstream:`` are read; anything malformed raises.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    tag = commit = None
+    in_upstream = False
+    with open(path, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.split("#", 1)[0].rstrip()
+            if not line.strip():
+                continue
+            if not line.startswith(" "):
+                in_upstream = line.strip() == "upstream:"
+                continue
+            if in_upstream:
+                key, _, val = line.strip().partition(":")
+                if key == "tag":
+                    tag = val.strip()
+                elif key == "commit":
+                    commit = val.strip()
+    if tag is None and commit is None:
+        return None
+    return v.upstream_tag(tag), v.sha1(commit, "pinned commit")
 
 
 def check(lock: Dict[str, Any], tag: str, commit: str) -> str:
