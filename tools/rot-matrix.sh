@@ -34,9 +34,9 @@ while IFS= read -r t; do tags+=("$t"); done < <(git -C "$repo" tag -l --sort=-v:
 ((${#tags[@]})) || { echo "error: no numeric upstream tags found in $repo" >&2; exit 3; }
 
 series_sha=$("$script_dir/series-sha.sh")
-echo "Series sha256: $series_sha ($(grep -cvE '^[[:space:]]*(#|$)' "$root/patches/series") patches); tags tested: ${#tags[@]}"
+echo "Series sha256: $series_sha ($(grep -cvE '^[[:space:]]*(#|$)' "${VP_PATCH_DIR:-$root/patches}/series") patches); tags tested: ${#tags[@]}"
 echo
-total=$(grep -cvE '^[[:space:]]*(#|$)' "$root/patches/series")
+total=$(grep -cvE '^[[:space:]]*(#|$)' "${VP_PATCH_DIR:-$root/patches}/series")
 if ((prefix)); then echo "| Tag | Commit | Result | Prefixes | Detail |"; echo "|---|---|---|---|---|"
 else echo "| Tag | Commit | Result | Detail |"; echo "|---|---|---|---|"; fi
 fail=0

@@ -1,0 +1,191 @@
+[
+ {
+  "id": 200,
+  "tag_name": "2.20.0",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0"
+ },
+ {
+  "id": 190,
+  "tag_name": "2.19.0",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.19.0"
+ },
+ {
+  "id": 1819,
+  "tag_name": "2.18.19",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.18.19"
+ },
+ {
+  "id": 210,
+  "tag_name": "2.21.0",
+  "draft": true,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.21.0"
+ },
+ {
+  "id": 220,
+  "tag_name": "2.22.0",
+  "draft": false,
+  "prerelease": true,
+  "published_at": null,
+  "target_commitish": "master",
+  "name": "Release 2.22.0"
+ },
+ {
+  "id": 999,
+  "tag_name": "9.9.9",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 9.9.9"
+ },
+ {
+  "id": 1,
+  "tag_name": "2.0.2-nightly.d20260101",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.0.2-nightly.d20260101"
+ },
+ {
+  "id": 2,
+  "tag_name": "2.0.2-daily.5",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.0.2-daily.5"
+ },
+ {
+  "id": 3,
+  "tag_name": "v2.18.9",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release v2.18.9"
+ },
+ {
+  "id": 4,
+  "tag_name": "$(id)",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release $(id)"
+ },
+ {
+  "id": 5,
+  "tag_name": "2.20.0\n3.0.0",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0\n3.0.0"
+ },
+ {
+  "id": 6,
+  "tag_name": "2.20.0\n",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0\n"
+ },
+ {
+  "id": 7,
+  "tag_name": "../../etc/passwd",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release ../../etc/passwd"
+ },
+ {
+  "id": 8,
+  "tag_name": "2.20.0;rm -rf /",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0;rm -rf /"
+ },
+ {
+  "id": 9,
+  "tag_name": "`id`.1.1",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release `id`.1.1"
+ },
+ {
+  "id": 10,
+  "tag_name": "２.２０.０",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release ２.２０.０"
+ },
+ {
+  "id": 11,
+  "tag_name": "2.20.0‮",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0‮"
+ },
+ {
+  "id": 12,
+  "tag_name": "12345.1.1",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 12345.1.1"
+ },
+ {
+  "id": 13,
+  "tag_name": "1.2",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 1.2"
+ },
+ {
+  "id": 14,
+  "tag_name": "-1.2.3",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release -1.2.3"
+ },
+ {
+  "id": 15,
+  "tag_name": "2.20.0-vp.1",
+  "draft": false,
+  "prerelease": true,
+  "published_at": "2026-11-22T06:38:51Z",
+  "target_commitish": "master",
+  "name": "Release 2.20.0-vp.1"
+ }
+]

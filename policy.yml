@@ -1,30 +1,8 @@
-# policy.yml - decisions the automation reads; edit here, not in scripts. Documented in README.md.
-version: 1
-
-# Only releases from these GitHub owners are ever built (R-TRK-2). Tags are resolved by dereferencing the annotated tag.
-allowed_upstream_owners:
-  - Nonary
-tag_regex: '^[0-9]+\.[0-9]+\.[0-9]+$'   # numeric upstream releases only
-
-# Do not build or deploy a release younger than this (R-DEP-2).
-cooling_off_hours: 24
-
-# true = stop building new upstream releases (the last good release stays current).
+# policy.yml - CONTRACT.md section 5 shape. Read by CI (ci/policy.py, strict, fails closed) and by consumers.
+# Top-level 'key: value' lines only, no nesting, no extra keys.
+schema: 1
+allow_upstream_owners: [Nonary]
+cooling_off_hours: {stable: 24, canary: 0}
 hold: false
-
-# Release channels. canary is consumed first (test devices), stable after its cooling-off.
-channels:
-  canary:
-    cooling_off_hours: 0
-    prerelease: true
-  stable:
-    cooling_off_hours: 24
-    prerelease: false
-
-# Rollback window: keep the last N published releases (R-BLD-5).
-retention:
-  keep_releases: 10
-
-# How many newest upstream tags the rot matrix tests (R-PAT-3).
-rot_matrix:
-  last_n: 5
+deny: []
+keep_releases: 10

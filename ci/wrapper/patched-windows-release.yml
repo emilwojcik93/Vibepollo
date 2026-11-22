@@ -1,0 +1,417 @@
+# TEMPLATE. Lives in automation:ci/wrapper/ and is copied by upstream-watch into every
+# build/<tag>-nN branch as .github/workflows/patched-windows-release.yml (together with
+# ci/*.py -> .vp-ci/ and .vp-ci/build-meta.json).  It runs ONLY on those branches.
+#
+# Trigger design: pushing the build branch starts the run (the push is made with a GitHub App
+# token, which -- unlike GITHUB_TOKEN -- triggers workflows).  A workflow_dispatch trigger is
+# kept for manual re-runs.  This avoids the "dispatch only works for workflows present on the
+# default branch" limitation and keeps the run bound to the exact pushed commit.
+#
+# Trust boundaries:
+#   validate  contents:read           regex-validates ref + .vp-ci/build-meta.json, derives versions
+#   build     actions:read,contents:read   upstream ci-windows.yml (reusable, secret-free inputs)
+#   package   (none)                  parses the untrusted MSI with msiinfo; enforces the
+#                                     ProductVersion window; builds a preview manifest
+#   publish   contents/attestations/id-token:write   hashes, manifests, attests, releases
+#   notify    actions:write           dispatches the alert workflow on the default branch
+name: Patched Windows Release
+
+on:
+  push:
+    branches:
+      - 'build/**'
+      - 'ci-trial/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify but create no release and no attestation
+        type: boolean
+        default: true
+      tests:
+        description: Run the upstream Windows test suite (may only be disabled for a dry run)
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: vp-patched-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate branch and metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      release_tag: ${{ steps.p.outputs.release_tag }}
+      tag: ${{ steps.p.outputs.tag }}
+      n: ${{ steps.p.outputs.n }}
+      build_version: ${{ steps.p.outputs.build_version }}
+      msi_product_version: ${{ steps.p.outputs.msi_product_version }}
+      upstream_msi_version: ${{ steps.p.outputs.upstream_msi_version }}
+      next_upstream_msi_version: ${{ steps.p.outputs.next_upstream_msi_version }}
+      upstream_commit: ${{ steps.p.outputs.upstream_commit }}
+      release_id: ${{ steps.p.outputs.release_id }}
+      series_sha256: ${{ steps.p.outputs.series_sha256 }}
+      patch_count: ${{ steps.p.outputs.patch_count }}
+      patch_groups: ${{ steps.p.outputs.patch_groups }}
+      gate: ${{ steps.p.outputs.gate }}
+      environment: ${{ steps.p.outputs.environment }}
+      dry_run: ${{ steps.p.outputs.dry_run }}
+      tests: ${{ steps.p.outputs.tests }}
+      trial: ${{ steps.p.outputs.trial }}
+      source_ref: ${{ steps.p.outputs.source_ref }}
+      source_sha: ${{ steps.p.outputs.source_sha }}
+    steps:
+      - name: Checkout build branch (history needed for the ancestry check)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 120
+          persist-credentials: false
+      - name: Validate ref, metadata, ancestry and workflow set
+        id: p
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_TESTS: ${{ inputs.tests }}
+        run: python3 .vp-ci/wrapper_params.py
+      - name: Summary
+        env:
+          RELEASE_TAG: ${{ steps.p.outputs.release_tag }}
+          BUILD_VERSION: ${{ steps.p.outputs.build_version }}
+          MSI_VERSION: ${{ steps.p.outputs.msi_product_version }}
+          DRY_RUN: ${{ steps.p.outputs.dry_run }}
+          GATE: ${{ steps.p.outputs.gate }}
+        run: |
+          {
+            echo "### Patched build"
+            echo "* release tag: \`${RELEASE_TAG}\`"
+            echo "* build version: \`${BUILD_VERSION}\` (MSI ProductVersion \`${MSI_VERSION}\`)"
+            echo "* dry run: ${DRY_RUN}; gate: ${GATE}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build (upstream ci-windows.yml)
+    needs: validate
+    permissions:
+      actions: read  # read workflow runs / artifacts of this run
+      contents: read
+    uses: ./.github/workflows/ci-windows.yml
+    with:
+      # Secret-free combination (research/01 section 1). Never run on a tag ref.
+      release_commit: ${{ needs.validate.outputs.source_sha }}
+      release_version: ${{ needs.validate.outputs.build_version }}
+      symbol_product_name: Vibepollo
+      symbol_release_prefix: polo
+      build_only: false
+      daily_unsigned: false
+      daily_validation_only: false
+      release_channel: ''
+      release_tag: ''
+      publish_symbols: false
+      upload_symbols_artifact: false
+      require_signpath_signing: false
+      require_truehdr_runtime: true
+      build_tests: ${{ needs.validate.outputs.tests == 'true' }}
+      release_artifact_retention_days: 7
+
+  package:
+    name: Inspect MSI and preview manifest (unprivileged)
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions: {}
+    steps:
+      - name: Checkout helper scripts only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .vp-ci
+          persist-credentials: false
+      - name: Download installer artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-Windows
+          path: in/build
+      - name: Download MSI artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-msi-package-Windows
+          path: in/msi
+      - name: Install msitools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends msitools
+      - name: Enforce MSI ProductVersion window and summarize custom actions
+        env:
+          EXPECTED: ${{ needs.validate.outputs.msi_product_version }}
+          FLOOR: ${{ needs.validate.outputs.upstream_msi_version }}
+          CEILING: ${{ needs.validate.outputs.next_upstream_msi_version }}
+        run: |
+          set -euo pipefail
+          MSI="$(python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist /dev/null --print-msi)"
+          python3 .vp-ci/msi_summary.py --msi "$MSI" --expected "$EXPECTED" --floor "$FLOOR" \
+            --ceiling "$CEILING" --out msi-summary.json
+      - name: Stage assets and build the preview manifest
+        env:
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          UP_TAG: ${{ needs.validate.outputs.tag }}
+          UP_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+          RELEASE_ID: ${{ needs.validate.outputs.release_id }}
+          N: ${{ needs.validate.outputs.n }}
+          BUILD_VERSION: ${{ needs.validate.outputs.build_version }}
+          MSI_VERSION: ${{ needs.validate.outputs.msi_product_version }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          SERIES_SHA: ${{ needs.validate.outputs.series_sha256 }}
+          PATCH_COUNT: ${{ needs.validate.outputs.patch_count }}
+          GROUPS_CSV: ${{ needs.validate.outputs.patch_groups }}
+        run: |
+          set -euo pipefail
+          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist preview --require-msi --expect-msi-version "$MSI_VERSION"
+          python3 .vp-ci/manifest_gen.py generate --dist preview --tag "$TAG" --upstream-tag "$UP_TAG" \
+            --upstream-commit "$UP_COMMIT" --release-id "$RELEASE_ID" --n "$N" \
+            --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
+            --source-ref "$SOURCE_REF" --source-sha "$SOURCE_SHA" --series-sha "$SERIES_SHA" \
+            --patch-count "$PATCH_COUNT" --groups "$GROUPS_CSV" \
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary msi-summary.json
+          python3 .vp-ci/manifest_gen.py verify --dist preview
+          cp msi-summary.json preview/msi-summary.json
+          {
+            echo "### Preview manifest"
+            echo '```'
+            cat preview/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload MSI summary for the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msi-summary
+          path: msi-summary.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Upload preview (dry runs only; nothing here is published)
+        if: needs.validate.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-preview
+          path: |
+            preview/manifest.json
+            preview/SHA256SUMS
+            preview/msi-summary.json
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Attest and publish release
+    needs: [validate, build, package]
+    if: needs.validate.outputs.dry_run == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ needs.validate.outputs.environment }}
+    permissions:
+      contents: write  # create the draft release and push (see job)
+      id-token: write  # OIDC token for the Sigstore attestation (publish job only)
+      attestations: write  # store the attestation (publish job only)
+    steps:
+      - name: Checkout helper scripts only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .vp-ci
+          persist-credentials: false
+      - name: Download installer artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-Windows
+          path: in/build
+      - name: Download MSI artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned-msi-package-Windows
+          path: in/msi
+      - name: Download MSI summary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: msi-summary
+          path: in/summary
+      - name: Check for an existing release of this tag
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .vp-ci/validate_tag.py release-tag "$TAG"
+          python3 .vp-ci/validate_tag.py repo-slug "$REPO"
+          state=none
+          if gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft' > draft.txt 2>/dev/null; then
+            if [ "$(cat draft.txt)" = "true" ]; then state=draft; else state=published; fi
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = "published" ]; then
+            echo "::notice::Release $TAG is already published; nothing to do."
+          fi
+      - name: Remove a stale draft from an earlier failed attempt
+        if: steps.existing.outputs.state == 'draft'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+        run: gh release delete "$TAG" --repo "$REPO" --yes
+      - name: Stage assets, write manifest.json and SHA256SUMS
+        if: steps.existing.outputs.state != 'published'
+        env:
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          UP_TAG: ${{ needs.validate.outputs.tag }}
+          UP_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+          RELEASE_ID: ${{ needs.validate.outputs.release_id }}
+          N: ${{ needs.validate.outputs.n }}
+          BUILD_VERSION: ${{ needs.validate.outputs.build_version }}
+          MSI_VERSION: ${{ needs.validate.outputs.msi_product_version }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          SERIES_SHA: ${{ needs.validate.outputs.series_sha256 }}
+          PATCH_COUNT: ${{ needs.validate.outputs.patch_count }}
+          GROUPS_CSV: ${{ needs.validate.outputs.patch_groups }}
+        run: |
+          set -euo pipefail
+          python3 .vp-ci/stage_assets.py --build-dir in/build --msi-dir in/msi --dist dist --require-msi --expect-msi-version "$MSI_VERSION"
+          python3 .vp-ci/manifest_gen.py generate --dist dist --tag "$TAG" --upstream-tag "$UP_TAG" \
+            --upstream-commit "$UP_COMMIT" --release-id "$RELEASE_ID" --n "$N" \
+            --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
+            --source-ref "$SOURCE_REF" --source-sha "$SOURCE_SHA" --series-sha "$SERIES_SHA" \
+            --patch-count "$PATCH_COUNT" --groups "$GROUPS_CSV" \
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary in/summary/msi-summary.json
+          python3 .vp-ci/manifest_gen.py verify --dist dist
+      - name: Attest installer, MSI, SHA256SUMS and manifest
+        if: steps.existing.outputs.state != 'published'
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/VibepolloSetup.exe
+            dist/Vibepollo.msi
+            dist/SHA256SUMS
+            dist/manifest.json
+      - name: Self-verify the attestation exactly as a consumer would
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_REF: ${{ needs.validate.outputs.source_ref }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE" dist/attestation.sigstore.json
+          for f in VibepolloSetup.exe Vibepollo.msi SHA256SUMS manifest.json; do
+            ok=0
+            for _ in 1 2 3 4; do
+              if gh attestation verify "dist/$f" --repo "$REPO" \
+                   --signer-workflow "$REPO/.github/workflows/patched-windows-release.yml" \
+                   --source-ref "$SOURCE_REF" --deny-self-hosted-runners; then ok=1; break; fi
+              sleep 15
+            done
+            [ "$ok" = 1 ] || { echo "::error::attestation for $f does not verify"; exit 1; }
+            # Offline mode (CONTRACT 3b, Ally SYSTEM task): no token, bundle from the release.
+            env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "dist/$f" --bundle dist/attestation.sigstore.json \
+              --repo "$REPO" --signer-workflow "$REPO/.github/workflows/patched-windows-release.yml" \
+              --source-ref "$SOURCE_REF" --deny-self-hosted-runners \
+              || { echo "::error::offline bundle verification of $f failed"; exit 1; }
+          done
+      - name: Create DRAFT release and upload every asset
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          UP_TAG: ${{ needs.validate.outputs.tag }}
+          UP_COMMIT: ${{ needs.validate.outputs.upstream_commit }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          SERIES_SHA: ${{ needs.validate.outputs.series_sha256 }}
+          BUILD_VERSION: ${{ needs.validate.outputs.build_version }}
+          MSI_VERSION: ${{ needs.validate.outputs.msi_product_version }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<NOTES
+          Unofficial patched build of Nonary/Vibepollo ${UP_TAG} (upstream commit ${UP_COMMIT}).
+
+          * build version: ${BUILD_VERSION} (MSI ProductVersion ${MSI_VERSION})
+          * patch series sha256: ${SERIES_SHA}
+          * source commit: ${SOURCE_SHA}
+
+          Verify before installing: \`gh release verify ${TAG} -R ${REPO}\` and
+          \`gh attestation verify <file> -R ${REPO} --signer-workflow ${REPO}/.github/workflows/patched-windows-release.yml --deny-self-hosted-runners\`.
+          NOTES
+          gh release create "$TAG" --repo "$REPO" --draft --prerelease --latest=false \
+            --target "$SOURCE_SHA" --title "Vibepollo ${TAG}" --notes-file notes.md \
+            dist/VibepolloSetup.exe dist/Vibepollo.msi dist/SHA256SUMS dist/manifest.json \
+            dist/attestation.sigstore.json
+      - name: Check uploaded asset digests against local hashes
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[] | "\(.digest) \(.name)"' > remote.txt
+          for f in VibepolloSetup.exe Vibepollo.msi SHA256SUMS manifest.json attestation.sigstore.json; do
+            local_hash="sha256:$(sha256sum "dist/$f" | cut -d' ' -f1)"
+            grep -qxF "$local_hash $f" remote.txt || { echo "::error::digest mismatch for $f"; exit 1; }
+          done
+      - name: Publish (immutable once enabled in repository settings)
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease --latest=false
+      - name: Verify the published release is immutable and attested
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          ok=0
+          for _ in 1 2 3 4 5; do
+            if gh release verify "$TAG" --repo "$REPO"; then ok=1; break; fi
+            sleep 15
+          done
+          [ "$ok" = 1 ] || { echo "::error::release is NOT verifiable: enable immutable releases in repository settings (consumers fail closed until then)"; exit 1; }
+          gh release verify-asset "$TAG" dist/VibepolloSetup.exe --repo "$REPO"
+          # CONTRACT 3b: offline consumers rely on the API field immutable == true.
+          imm="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.immutable')"
+          [ "$imm" = "true" ] || { echo "::error::release API reports immutable=${imm}; enable immutable releases"; exit 1; }
+
+  notify:
+    name: Alert
+    needs: [validate, build, package, publish]
+    if: always() && needs.validate.outputs.trial != 'true' && (contains(needs.*.result, 'failure') || needs.publish.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write  # enable workflows / re-run / dispatch notify.yml (see job)
+    steps:
+      - name: Dispatch notify.yml on the default branch
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          PUBLISHED: ${{ needs.publish.result }}
+        run: |
+          set -euo pipefail
+          kind=failure
+          [ "$PUBLISHED" = "success" ] && kind=success
+          gh workflow run notify.yml --repo "$REPO" --ref automation \
+            -f kind="$kind" -f run_id="$RUN_ID" -f tag="$TAG"

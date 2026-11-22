@@ -51,7 +51,7 @@ Do not resolve by taking one side wholesale (`--theirs`/`--ours`): that silently
 cd <automation clone>
 tools/export-series.sh ../rot <new-tag>                   # rewrites patches/ and patches/series
 tools/apply-series.sh <new-tag> --verify <rot-branch-or-HEAD-of-../rot>
-tools/rot-matrix.sh 5                                     # the older releases must still apply, or be dropped from policy on purpose
+tools/rot-matrix.sh 5                                     # the older releases must still apply, or be listed on purpose in ci/rot-known-fail.txt
 tools/update-lock.sh <new-tag> --reference <rot-HEAD>     # writes upstream.lock
 git add -A && git commit -m "series: rebase onto <new-tag>"
 ```

@@ -1,3 +1,5 @@
 * text=auto eol=lf
 patches/** -text
 *.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf

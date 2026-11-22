@@ -15,7 +15,11 @@ the Xbox full screen experience. Contract and options: `docs/touch-posture.md` (
 patches/series        ordered list of patch files ('#' comments allowed)
 patches/0001..0008    git format-patch files, applied with git am --3way
 upstream.lock         pinned upstream tag + commit + series hash + resulting tree (tools/update-lock.sh writes it)
-policy.yml            allowlisted owners, cooling-off, hold switch, channels, retention
+policy.yml            CONTRACT.md section 5 shape: schema, allow_upstream_owners, cooling_off_hours, hold, deny, keep_releases
+upstream-seen.json    CI state (first-seen tag -> commit, builds); written by CI only, see docs/CI.md
+.github/workflows/    upstream-watch, rot-matrix, notify, keepalive, ci-selftest (CI engineer; docs/CI.md)
+ci/                   CI scripts, wrapper workflow template and their tests (python -m pytest ci/tests -q)
+tools/tests/run.sh    self-contained tests for the tools/ scripts (no network)
 tools/apply-series.sh   apply the series onto an upstream ref in a temp worktree, optionally verify the tree
 tools/rot-matrix.sh     dry-run the series against the last N upstream tags, print a table
 tools/export-series.sh  regenerate patches/ from a scratch branch (reproducible format-patch flags)
@@ -91,19 +95,39 @@ To move the pin to a new upstream release, see `docs/RESOLVING-ROT.md` (clean ap
 
 ## Policy
 
-`policy.yml` is the single place for decisions: which upstream owners are trusted (`Nonary`), the cooling-off age
-before a release is built or deployed (24 h), the `hold` switch (true stops new builds, last good release stays),
-the canary and stable channels, and how many releases are kept for rollback (10). The scripts here do not read it
-yet; the Phase 2 workflows will.
+`policy.yml` follows CONTRACT.md section 5 exactly and is parsed strictly (fails closed on any other shape: no nesting,
+no unknown shapes):
 
-Authorship: every patch is authored `emilwojcik93 <adminit@adar.pl>`; keep that when adding patches.
+```yaml
+schema: 1
+allow_upstream_owners: [Nonary]           # only releases from these owners are built or installed
+cooling_off_hours: {stable: 24, canary: 0} # minimum release age per channel
+hold: false                                # true stops new builds; the last good release stays current
+deny: []                                   # tags that must never install
+keep_releases: 10                          # rollback window
+```
+
+CI reads it (`ci/policy.py`); the scripts under `tools/` do not. Authorship: every patch is authored
+`emilwojcik93 <adminit@adar.pl>`; keep that when adding patches.
+
+## Two state files, two jobs
+
+- `upstream.lock` (this README, `tools/update-lock.sh`): the reference pin. One upstream tag, its commit, the series hash
+  and the resulting tree. CI halts if a tag moves against it. Moved by hand only.
+- `upstream-seen.json` (CI, `docs/CI.md`): first-seen commit and build numbers per upstream tag, written by the
+  `upstream-watch` workflow. Never edit by hand.
+
+CI applies the series with `ci/apply_series.py` (pinned identity and dates, reproducible tip SHA), not with
+`tools/apply-series.sh`; both implement the same steps and produce the same tree, which the CI tests check
+(`result_tree` 37b3569f... for 2.20.0). Use the scripts here for humans and local checks.
 
 ## Series hash (`patch_series_sha256`)
 
 Defined once, in `tools/series-sha.sh`, and identical in every repository that uses this scheme (also the moonlight-qt
 one): sha256 over the bytes of `patches/series` (CRLF normalised to LF) followed by the bytes of each patch file listed
 in it (comments and blank lines in the series ignored), in series order, patch files exactly as stored.
-Equivalent: `{ tr -d '' < patches/series; for p in <listed patches in order>; do cat patches/$p; done; } | sha256sum`.
+Equivalent: `{ tr -d '
+' < patches/series; for p in <listed patches in order>; do cat patches/$p; done; } | sha256sum`.
 
 ## upstream.lock
 
