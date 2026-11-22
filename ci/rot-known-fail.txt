@@ -1,0 +1,3 @@
+# Upstream tags the patch series is KNOWN not to apply to (one per line).
+# Entries here do not fail the rot matrix; keep this list explicit and short.
+2.18.9   # conflicts in src/main.cpp (orchestrator experiment, research/05)
