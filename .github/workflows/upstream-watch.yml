@@ -143,7 +143,7 @@ jobs:
           set -euo pipefail
           hold=false
           if [ "$HOLD_POLICY" = "true" ] || [ "$HOLD_VAR" = "true" ]; then hold=true; fi
-          python3 ci/plan_build.py --tag "$TAG" --commit "$COMMIT" --lock upstream-seen.json \
+          python3 ci/plan_build.py --tag "$TAG" --commit "$COMMIT" --lock upstream-seen.json --pin-file upstream.lock \
             --our-releases our-releases.json --runs runs.json --series-sha "$SERIES_SHA" \
             --hold "$hold" --override-hold "${OVERRIDE_HOLD:-false}" --force-rebuild "${FORCE:-false}" \
             --manual-tag "$MANUAL" --github-output
