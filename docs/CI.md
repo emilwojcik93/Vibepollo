@@ -35,7 +35,7 @@ A workflow_dispatch needs the workflow file to be registered on the default bran
 exists only on build branches (it must live in the tree that `ci-windows.yml` checks out). Pushing the branch with an
 App token (App tokens, unlike `GITHUB_TOKEN`, trigger workflows) starts the run bound to the exact pushed commit.
 `workflow_dispatch` stays in the wrapper only for manual re-runs on an already-registered workflow. Retries of failed
-builds use `gh run rerun --failed` (planned by `plan_build.py`, at most one automatic retry, then `stuck` + alert).
+builds use `gh run rerun --failed` (planned by `plan_build.py`, at most 3 attempts in total per build branch, counted with the run `attempt` field because a re-run keeps the run id; then `stuck` + alert).
 
 ## 2. Files (branch `automation`, owned by the CI/Release Engineer)
 
@@ -109,10 +109,35 @@ metadata disagrees with the version mapper. Unit tests cover all 87 values of N 
   release_tag='', publish_symbols=false, upload_symbols_artifact=false, require_signpath_signing=false,
   require_truehdr_runtime=true (public release, no token), release_artifact_retention_days=7, build_tests=true`.
   Never dispatched on a tag ref (the wrapper refuses non-branch refs).
-* Sensitive-path gate (R-SEC-5, optional): `sensitive_paths.py` lists changed upstream paths (`.github/`,
-  `packaging/windows/`, drivers, submodules, WiX files, lockfiles). Recorded in the run summary always; routes the publish
-  job to environment `release-approval` only when repository variable `ENFORCE_SENSITIVE_GATE=true`. `GITHUB_TOKEN`
-  cannot read environment protection rules, so the Owner must make sure `release-approval` really has a required reviewer.
+* Sensitive-path report/gate (R-SEC-5): `sensitive_paths.py` lists upstream files changed since the LAST BUILT upstream tag
+  (else the previous release) under `.github/`, `packaging/`, `cmake/`, `src_assets/windows/`, `third-party/`, `scripts/`,
+  `.signpath/`, WiX/installer/driver files (`.wxs .wxi .wxl .vbs .ps1 .bat .cmd .inf .cat .cmake`), lockfiles/package.json,
+  CMakeLists.txt, `.gitmodules`, and network/crypto code (`src/nvhttp*, rtsp*, confighttp*, httpcommon*, stream*, crypto*,
+  network*, upnp*, webrtc*`). **Default = report only** (Owner decision: fully automatic installs): a `::warning::` line and a
+  run-summary section list the files, the release notes carry a "SENSITIVE UPSTREAM PATHS TOUCHED" bullet and
+  `manifest.json` has the key `sensitive_paths_touched {since, count, paths[<=50], enforced}`. Setting the repository variable
+  `ENFORCE_SENSITIVE_GATE=true` (one variable) routes only such releases to environment `release-approval`; everything else
+  uses `release-auto`. `GITHUB_TOKEN` cannot read environment protection rules, so the Owner must make sure
+  `release-approval` really has a required reviewer before enabling enforcement.
+* `ci-windows.yml` is the only upstream workflow kept in a build branch; `assemble_build.py` and `wrapper_params.py` fail
+  closed unless its `on:` block is exactly `workflow_call` (an upstream edit adding push/dispatch/schedule triggers stops the
+  pipeline instead of running unattended upstream code).
+* `release-provenance.json` from upstream's finalize job is mandatory: the staged installer hash, the standalone MSI hash and
+  the ProductVersion must match its `embedded_msi` record (`verified` and `upgrade_table_verified` true); the hash and
+  versions are recorded in `manifest.json` (`installer_embeds`). The provenance is produced by the same untrusted build, so
+  this proves consistency with upstream's own check, not independent extraction of the MSI from the bootstrapper.
+* Immutable releases are checked BEFORE the draft is created (`GET /repos/{repo}/immutable-releases`; if `GITHUB_TOKEN`
+  cannot read it, the repository variable `IMMUTABLE_CONFIRMED=true` is required) and a pre-existing tag without a release
+  aborts the job, so the tag name is never burnt on a mutable release. The post-publish `gh release verify` + API
+  `immutable == true` assertion stays and also runs on re-runs of an already published release.
+* State ordering: `upstream-seen.json` (pin + planned build) is committed and pushed to `automation` BEFORE the build
+  branch is pushed; a failed lock push fails the job and alerts. A recorded build whose branch push then failed shows up as
+  `stuck` (no run found) and alerts every poll; a published release without a state entry is also `stuck`, never a silent noop.
+  The file is pre-seeded with the 2.20.0 and 2.20.1 pins so a first-seen tag can never be silently re-pointed.
+* Tags are canonical only (no leading zeros: `2.20.00`, `02.20.0` rejected); upstream tags that cannot be mapped to an MSI
+  version (X/Y > 255, Z+1 > 654) are skipped by selection instead of blocking newer buildable releases.
+* First automatic run: selection returns the NEWEST eligible upstream release only (today `2.20.1` -> `2.20.1-vp.1`,
+  build `2.20.2-alpha.1`, MSI `2.20.201.0`); older releases are never backfilled unless dispatched with an explicit `tag`.
 * Release assets: `VibepolloSetup.exe`, `Vibepollo.msi`, `SHA256SUMS` (installer, MSI, provenance, manifest; not itself,
   not the bundle), `manifest.json` (schema 1 plus additive keys `msi` and the extra asset `release-provenance.json`),
   `attestation.sigstore.json` (one bundle covering installer, MSI, SHA256SUMS, manifest). Release created as draft,
@@ -133,7 +158,7 @@ metadata disagrees with the version mapper. Unit tests cover all 87 values of N 
 | Pause | `policy.yml: hold: true` or repository variable `HOLD=true`; `override_hold=true` for one run |
 | Rebuild with an unchanged series | `force_rebuild=true` -> next `N` |
 | Series changed (new commit in `patches/`) | next scheduled/manual run sees a new `series_sha256` -> new `N` automatically |
-| Build failed | one automatic `gh run rerun --failed`; afterwards `stuck` alert every run until fixed |
+| Build failed | automatic `gh run rerun --failed` until 3 attempts in total (run `attempt` field), then `stuck` alert every poll until fixed; a green/cancelled run without a release is `stuck` immediately |
 | Patch conflict | run summary + artifact `conflict-report` (failing patch, conflict hunks); fix patches on `automation` |
 | Moved upstream tag | investigate; to accept the new commit remove the tag entry from `upstream-seen.json` deliberately |
 | Verify a release by hand | `gh release verify <tag> -R emilwojcik93/Vibepollo`; `gh attestation verify VibepolloSetup.exe -R emilwojcik93/Vibepollo --signer-workflow emilwojcik93/Vibepollo/.github/workflows/patched-windows-release.yml --source-ref refs/heads/build/<tag>-n<N> --deny-self-hosted-runners` |
@@ -179,7 +204,7 @@ See section 9 of the engineer's report; summarized:
 2. Create the GitHub App (Contents: Read & write, Workflows: Read & write, Metadata: Read; no webhook, no user access;
    install on this repository only) and store `PUSH_APP_ID` (variable; the App ID or Client ID) and
    `PUSH_APP_PRIVATE_KEY` (secret) in environment `build-push` (deployment branches: `automation` only).
-3. Enable immutable releases (Settings -> General -> Releases).
+3. Enable immutable releases (Settings -> General -> Releases). If `GET /repos/{repo}/immutable-releases` is not readable with `GITHUB_TOKEN`, also set repository variable `IMMUTABLE_CONFIRMED=true` (the publish job refuses to run without one of the two).
 4. Environments `release-auto` (no rules) and, optionally, `release-approval` (required reviewer = Owner, only if
    `ENFORCE_SENSITIVE_GATE=true`). Optional secret `GCHAT_WEBHOOK_URL`.
 5. Rulesets (see report), "Require actions to be pinned to a full-length commit SHA", Dependabot alerts.

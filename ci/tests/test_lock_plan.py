@@ -121,7 +121,7 @@ def test_plan_in_flight_noop():
 def test_plan_retry_budget_then_stuck():
     lock = mklock(builds=[build(1)])
     runs = [{"headBranch": "build/2.20.0-n1", "status": "completed", "conclusion": "failure", "databaseId": i}
-            for i in (5, 6)]
+            for i in (5, 6, 7)]
     r = plan(lock, runs=runs)
     assert r["action"] == "noop" and r["stuck"] is True
 

@@ -75,7 +75,7 @@ def make_dist_inputs(tmp_path, extra_build=None, msi_count=1):
     msi = b"msi-bytes"
     (b / "release-provenance.json").write_text(json.dumps({
         "schema_version": 1, "assets": {"VibepolloSetup.exe": hashlib.sha256(inst).hexdigest()},
-        "embedded_msi": {"verified": True, "sha256": hashlib.sha256(msi).hexdigest(),
+        "embedded_msi": {"verified": True, "upgrade_table_verified": True, "sha256": hashlib.sha256(msi).hexdigest(),
                          "msi_product_version": "2.20.101.0"}}))
     for name in (extra_build or []):
         (b / name).write_bytes(b"x")
@@ -208,7 +208,8 @@ def meta(tag="2.20.0", n=1, trial=False, branch=None, gate="auto"):
                       "msi_product_version": ver["msi_product_version"],
                       "branch": branch or f"{'ci-trial' if trial else 'build'}/{tag}-n{n}", "trial": trial},
             "patches": {"series_sha256": S1, "count": 8, "groups": ["posture"]},
-            "patch_commits": 8, "gate": gate, "sensitive_count": 0}
+            "patch_commits": 8, "gate": gate, "sensitive_count": 0,
+            "sensitive": {"since": "", "count": 0, "paths": [], "enforced": False}}
 
 
 def env(ref="refs/heads/build/2.20.0-n1", **kw):
@@ -271,7 +272,7 @@ def test_wrapper_params_cross_checks():
 def test_wrapper_workflow_set_check(tmp_path):
     d = tmp_path / "wf"
     d.mkdir()
-    (d / "ci-windows.yml").write_text("x")
+    (d / "ci-windows.yml").write_text("\n".join(["name: x", "on:", "  workflow_call:", "    inputs: {}", "jobs: {}", ""]))
     (d / "patched-windows-release.yml").write_text("x")
     wp.check_workflows(str(d))
     (d / "ci.yml").write_text("x")
@@ -311,13 +312,14 @@ def test_notify_cli_writes_json(tmp_path, monkeypatch):
 # --- sensitive paths --------------------------------------------------------------------------------
 
 def test_sensitive_paths():
-    hits = sp.sensitive(["README.md", "src/nvhttp.cpp", ".github/workflows/ci.yml", "packaging/windows/x.ps1",
-                         "third-party/libvirtualgamepad", "docs/a.md", "x/package-lock.json", ".gitmodules",
-                         "src_assets/windows/drivers/vhf-gamepad/install.ps1", "foo.wxs"])
-    assert hits == sorted([".github/workflows/ci.yml", "packaging/windows/x.ps1", "third-party/libvirtualgamepad",
-                           "x/package-lock.json", ".gitmodules",
-                           "src_assets/windows/drivers/vhf-gamepad/install.ps1", "foo.wxs"])
-    assert sp.sensitive(["src/a.cpp", "README.md", ""]) == []
+    flagged = [".github/workflows/ci.yml", "packaging/windows/x.ps1", "third-party/libvirtualgamepad",
+               "x/package-lock.json", ".gitmodules", "src_assets/windows/drivers/vhf-gamepad/install.ps1",
+               "foo.wxs", "src/nvhttp.cpp", "src/rtsp.h", "src/confighttp.cpp", "src/stream.cpp", "src/crypto.cpp",
+               "package-lock.json", "package.json", "CMakeLists.txt", "cmake/dependencies/x.cmake",
+               "scripts/install.ps1", "src_assets/windows/misc/service/install.bat", "vcpkg.json", "tools/foo.cmd"]
+    quiet = ["README.md", "docs/a.md", "src/a.cpp", "src/platform/linux/x.cpp", "tests/unit/test_a.cpp", ""]
+    assert sp.sensitive(flagged + quiet) == sorted(flagged)
+    assert sp.sensitive(quiet) == []
 
 
 def test_sensitive_cli(tmp_path, monkeypatch):

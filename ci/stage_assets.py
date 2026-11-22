@@ -46,7 +46,7 @@ def stage(build_dir: str, msi_dir: str, dist: str, require_msi: bool,
     os.makedirs(dist, exist_ok=True)
     build_files = _regular_files(build_dir)
     allowed = {INSTALLER, PROVENANCE}
-    if INSTALLER not in build_files or not set(build_files) <= allowed:
+    if INSTALLER not in build_files or PROVENANCE not in build_files or not set(build_files) <= allowed:
         raise v.ValidationError("build-Windows artifact content is not exactly the expected set")
     staged = []
     for name in build_files:
@@ -87,7 +87,7 @@ def verify_provenance(dist: str, expected_msi_version: str = "") -> None:
     """
     path = os.path.join(dist, PROVENANCE)
     if not os.path.isfile(path):
-        return
+        raise v.ValidationError("release-provenance.json is mandatory")
     import hashlib
 
     def sha(name: str) -> str:
@@ -105,13 +105,14 @@ def verify_provenance(dist: str, expected_msi_version: str = "") -> None:
     if not isinstance(assets, dict) or assets.get(INSTALLER) != sha(INSTALLER):
         raise v.ValidationError("provenance does not match the installer hash")
     emb = prov.get("embedded_msi")
-    if isinstance(emb, dict):
-        if os.path.isfile(os.path.join(dist, MSI_ASSET)) and emb.get("sha256") != sha(MSI_ASSET):
-            raise v.ValidationError("embedded MSI differs from the staged MSI")
-        if emb.get("verified") is not True:
-            raise v.ValidationError("upstream did not verify the embedded MSI")
-        if expected_msi_version and emb.get("msi_product_version") != expected_msi_version:
-            raise v.ValidationError("embedded MSI ProductVersion differs from the expected version")
+    if not isinstance(emb, dict):
+        raise v.ValidationError("provenance has no embedded_msi record")
+    if emb.get("verified") is not True or emb.get("upgrade_table_verified") is not True:
+        raise v.ValidationError("upstream did not verify the embedded MSI")
+    if os.path.isfile(os.path.join(dist, MSI_ASSET)) and emb.get("sha256") != sha(MSI_ASSET):
+        raise v.ValidationError("embedded MSI differs from the staged MSI")
+    if expected_msi_version and emb.get("msi_product_version") != expected_msi_version:
+        raise v.ValidationError("embedded MSI ProductVersion differs from the expected version")
 
 
 def find_msi(msi_dir: str) -> str:

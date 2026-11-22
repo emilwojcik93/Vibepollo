@@ -125,6 +125,13 @@ def reference_pin(path: str):
     return v.upstream_tag(tag), v.sha1(commit, "pinned commit")
 
 
+def last_built_before(lock: Dict[str, Any], tag: str) -> str:
+    """Highest tag below ``tag`` that has at least one recorded build ('' if none)."""
+    t = v.tag_tuple(tag)
+    cands = [k for k, ent in lock["entries"].items() if ent.get("builds") and v.tag_tuple(k) < t]
+    return max(cands, key=v.tag_tuple) if cands else ""
+
+
 def check(lock: Dict[str, Any], tag: str, commit: str) -> str:
     """Return ``'new'`` or ``'same'``; raise :class:`TagMoved` if re-pointed."""
     v.upstream_tag(tag)
@@ -163,6 +170,9 @@ def add_build(lock: Dict[str, Any], tag: str, n: int, series_sha: str, source_sh
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    lb = sub.add_parser("last-built")
+    lb.add_argument("--lock", required=True)
+    lb.add_argument("--tag", required=True)
     for name in ("record", "add-build", "check"):
         sp = sub.add_parser(name)
         sp.add_argument("--lock", required=True)
@@ -181,6 +191,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         lock = load(args.lock, getattr(args, "repo", "Nonary/Vibepollo"))
+        if args.cmd == "last-built":
+            print(last_built_before(lock, args.tag))
+            return 0
         if args.cmd == "check":
             print(check(lock, args.tag, args.commit))
             return 0

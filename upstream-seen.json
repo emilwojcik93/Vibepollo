@@ -1,0 +1,20 @@
+{
+  "entries": {
+    "2.20.0": {
+      "builds": [],
+      "commit": "2b0608e244d9e4c83d17c37338184a08c2c620f8",
+      "first_seen": "2026-11-22T18:48:04Z",
+      "published_at": "2026-11-22T07:48:05Z",
+      "release_id": 454286110
+    },
+    "2.20.1": {
+      "builds": [],
+      "commit": "0f80298bc19246fb71b46c8d7d1c3464724ea27d",
+      "first_seen": "2026-11-22T18:48:04Z",
+      "published_at": "2026-11-22T18:08:58Z",
+      "release_id": 454644848
+    }
+  },
+  "schema": 1,
+  "upstream": "Nonary/Vibepollo"
+}

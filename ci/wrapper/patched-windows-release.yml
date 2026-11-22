@@ -179,7 +179,7 @@ jobs:
             --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
             --source-ref "$SOURCE_REF" --source-sha "$SOURCE_SHA" --series-sha "$SERIES_SHA" \
             --patch-count "$PATCH_COUNT" --groups "$GROUPS_CSV" \
-            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary msi-summary.json
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary msi-summary.json --meta .vp-ci/build-meta.json
           python3 .vp-ci/manifest_gen.py verify --dist preview
           cp msi-summary.json preview/msi-summary.json
           {
@@ -257,6 +257,28 @@ jobs:
           if [ "$state" = "published" ]; then
             echo "::notice::Release $TAG is already published; nothing to do."
           fi
+      - name: Guard - immutable releases must be enabled BEFORE the tag is created
+        if: steps.existing.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.release_tag }}
+          CONFIRMED: ${{ vars.IMMUTABLE_CONFIRMED }}
+        run: |
+          set -uo pipefail
+          # A release published while immutability is off is mutable, and its tag name is burnt.
+          if out="$(gh api "repos/${REPO}/immutable-releases" --jq '.enabled' 2>/dev/null)"; then
+            [ "$out" = "true" ] || { echo "::error::immutable releases are NOT enabled for this repository (Settings > General > Releases); refusing to create the release"; exit 1; }
+            echo "immutable releases enabled (API)"
+          else
+            [ "$CONFIRMED" = "true" ] || { echo "::error::cannot read the immutable-releases setting with GITHUB_TOKEN. Enable it in Settings > General > Releases, then set repository variable IMMUTABLE_CONFIRMED=true"; exit 1; }
+            echo "::notice::setting not readable with GITHUB_TOKEN; relying on IMMUTABLE_CONFIRMED=true"
+          fi
+          # A pre-existing tag without a published release must not be adopted.
+          if gh api "repos/${REPO}/git/ref/tags/${TAG}" > /dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists but has no published release; refusing to reuse it"
+            exit 1
+          fi
       - name: Remove a stale draft from an earlier failed attempt
         if: steps.existing.outputs.state == 'draft'
         env:
@@ -288,7 +310,7 @@ jobs:
             --build-version "$BUILD_VERSION" --msi-product-version "$MSI_VERSION" --run-id "$RUN_ID" \
             --source-ref "$SOURCE_REF" --source-sha "$SOURCE_SHA" --series-sha "$SERIES_SHA" \
             --patch-count "$PATCH_COUNT" --groups "$GROUPS_CSV" \
-            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary in/summary/msi-summary.json
+            --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --msi-summary in/summary/msi-summary.json --meta .vp-ci/build-meta.json
           python3 .vp-ci/manifest_gen.py verify --dist dist
       - name: Attest installer, MSI, SHA256SUMS and manifest
         if: steps.existing.outputs.state != 'published'
@@ -339,12 +361,14 @@ jobs:
           MSI_VERSION: ${{ needs.validate.outputs.msi_product_version }}
         run: |
           set -euo pipefail
+          sensitive_line="$(python3 .vp-ci/manifest_gen.py sensitive-line --meta .vp-ci/build-meta.json)"
           cat > notes.md <<NOTES
           Unofficial patched build of Nonary/Vibepollo ${UP_TAG} (upstream commit ${UP_COMMIT}).
 
           * build version: ${BUILD_VERSION} (MSI ProductVersion ${MSI_VERSION})
           * patch series sha256: ${SERIES_SHA}
           * source commit: ${SOURCE_SHA}
+          * ${sensitive_line}
 
           Verify before installing: \`gh release verify ${TAG} -R ${REPO}\` and
           \`gh attestation verify <file> -R ${REPO} --signer-workflow ${REPO}/.github/workflows/patched-windows-release.yml --deny-self-hosted-runners\`.
@@ -374,7 +398,6 @@ jobs:
           TAG: ${{ needs.validate.outputs.release_tag }}
         run: gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease --latest=false
       - name: Verify the published release is immutable and attested
-        if: steps.existing.outputs.state != 'published'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -387,7 +410,7 @@ jobs:
             sleep 15
           done
           [ "$ok" = 1 ] || { echo "::error::release is NOT verifiable: enable immutable releases in repository settings (consumers fail closed until then)"; exit 1; }
-          gh release verify-asset "$TAG" dist/VibepolloSetup.exe --repo "$REPO"
+          if [ -f dist/VibepolloSetup.exe ]; then gh release verify-asset "$TAG" dist/VibepolloSetup.exe --repo "$REPO"; fi
           # CONTRACT 3b: offline consumers rely on the API field immutable == true.
           imm="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.immutable')"
           [ "$imm" = "true" ] || { echo "::error::release API reports immutable=${imm}; enable immutable releases"; exit 1; }

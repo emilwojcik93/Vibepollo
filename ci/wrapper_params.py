@@ -20,8 +20,10 @@ from typing import Any, Dict
 
 import vpcommon as v
 import version_map
+import workflow_check
+import manifest_gen
 
-REF_RE = re.compile(r"refs/heads/(build|ci-trial)/([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})-n([0-9]{1,3})")
+REF_RE = re.compile(r"refs/heads/(build|ci-trial)/(" + v._NUM + r"\." + v._NUM + r"\." + v._NUM + r")-n(0|" + v._BN + ")")
 
 
 def derive(env: Dict[str, str], meta: Dict[str, Any]) -> Dict[str, str]:
@@ -69,6 +71,7 @@ def derive(env: Dict[str, str], meta: Dict[str, Any]) -> Dict[str, str]:
     if not isinstance(meta.get("patch_commits"), int) or meta["patch_commits"] < 0:
         raise v.ValidationError("bad patch_commits")
 
+    sens = manifest_gen.sanitize_sensitive(meta.get("sensitive"))  # strict; also re-checked at publish
     dry = trial or env.get("INPUT_DRY_RUN", "") == "true"
     tests = env.get("INPUT_TESTS", "") != "false"
     if not tests and not dry:
@@ -83,7 +86,7 @@ def derive(env: Dict[str, str], meta: Dict[str, Any]) -> Dict[str, str]:
         "upstream_commit": commit, "release_id": str(release_id),
         "series_sha256": pt["series_sha256"], "patch_count": str(pt["count"]),
         "patch_groups": ",".join(groups), "patch_commits": str(meta["patch_commits"]),
-        "gate": gate,
+        "gate": gate, "sensitive_count": str(sens["count"]),
         "environment": "release-approval" if gate == "approval" else "release-auto",
         "dry_run": "true" if dry else "false", "tests": "true" if tests else "false",
         "trial": "true" if trial else "false",
@@ -108,6 +111,9 @@ def check_workflows(path: str = ".github/workflows") -> None:
     present = set(os.listdir(path))
     if not present <= allowed:
         raise v.ValidationError("unexpected workflow files present in the build tree")
+    if "ci-windows.yml" not in present:
+        raise v.ValidationError("ci-windows.yml missing from the build tree")
+    workflow_check.require_workflow_call_only(os.path.join(path, "ci-windows.yml"))
 
 
 def main() -> int:

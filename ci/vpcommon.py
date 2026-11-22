@@ -15,9 +15,12 @@ import sys
 from typing import Dict, Optional, Tuple
 
 # --- Patterns (CONTRACT section 1) -------------------------------------------------
-UPSTREAM_TAG_RE = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
-RELEASE_TAG_RE = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}-vp\.[0-9]{1,3}")
-BUILD_BRANCH_RE = re.compile(r"build/([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})-n([0-9]{1,3})")
+# Canonical numbers only: no leading zeros ("2.20.00", "02.20.0" would collide with "2.20.0").
+_NUM = r"(?:0|[1-9][0-9]{0,3})"
+_BN = r"(?:[1-9][0-9]{0,2})"  # build / rebuild counter, 1..999 (the pipeline itself stops at 87)
+UPSTREAM_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}")
+RELEASE_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}-vp\.{_BN}")
+BUILD_BRANCH_RE = re.compile(rf"build/({_NUM}\.{_NUM}\.{_NUM})-n({_BN})")
 SHA1_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")

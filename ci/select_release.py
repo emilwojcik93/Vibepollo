@@ -42,6 +42,9 @@ def numeric_candidates(releases: Any) -> List[Dict[str, Any]]:
         tag = rel.get("tag_name")
         if not isinstance(tag, str) or v.UPSTREAM_TAG_RE.fullmatch(tag) is None:
             continue
+        x, y, z = v.tag_tuple(tag)
+        if x > v.MAX_MAJOR_MINOR or y > v.MAX_MAJOR_MINOR or z + 1 > v.MAX_PATCH_PLUS_ONE:
+            continue  # cannot be mapped to an MSI ProductVersion: never let it wedge the selection
         rid = rel.get("id")
         if not isinstance(rid, int) or isinstance(rid, bool) or rid <= 0:
             continue

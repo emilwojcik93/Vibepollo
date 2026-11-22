@@ -118,6 +118,28 @@ def sanitize_msi_summary(raw: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
+def sanitize_sensitive(block: Any) -> Dict[str, Any]:
+    """Validate the ``sensitive`` block of build-meta.json (strict; raises on anything odd)."""
+    if not isinstance(block, dict):
+        raise v.ValidationError("bad sensitive block")
+    since = block.get("since", "")
+    if since != "":
+        v.upstream_tag(since)
+    count = block.get("count")
+    if not isinstance(count, int) or isinstance(count, bool) or not (0 <= count <= 1000000):
+        raise v.ValidationError("bad sensitive count")
+    paths = block.get("paths")
+    if not isinstance(paths, list) or len(paths) > 50:
+        raise v.ValidationError("bad sensitive paths")
+    for p in paths:
+        if not isinstance(p, str) or re.fullmatch(r"[ -~]{1,200}", p) is None:
+            raise v.ValidationError("bad sensitive path entry")
+    enforced = block.get("enforced")
+    if not isinstance(enforced, bool):
+        raise v.ValidationError("bad sensitive enforced flag")
+    return {"since": since, "count": count, "paths": list(paths), "enforced": enforced}
+
+
 def validate_manifest(m: Dict[str, Any]) -> None:
     """Strict schema-1 validation (raises ``ValidationError``)."""
     if m.get("schema") != 1 or m.get("product") != "vibepollo":
@@ -163,6 +185,22 @@ def validate_manifest(m: Dict[str, Any]) -> None:
     if m["attestation"] != [BUNDLE]:
         raise v.ValidationError("bad attestation list")
     v.require(v.ISO_TS_RE, m["created_at"], "created_at")
+    emb = m.get("installer_embeds")
+    if emb is not None:
+        v.sha256(emb["msi_sha256"], "embedded msi sha256")
+        if version_map.msi_tuple(emb["msi_product_version"]) != version_map.msi_tuple(
+                m["build"]["msi_product_version"]):
+            raise v.ValidationError("embedded MSI version differs from build.msi_product_version")
+    if "sensitive_paths_touched" in m:
+        sanitize_sensitive(m["sensitive_paths_touched"])
+
+
+def version_text(value: Any) -> str:
+    if value == "":
+        return ""
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]{1,5}(\.[0-9]{1,5}){2,3}", value) is None:
+        raise v.ValidationError("bad version text in provenance")
+    return value
 
 
 def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
@@ -188,6 +226,25 @@ def build_manifest(args: argparse.Namespace) -> Dict[str, Any]:
         "attestation": [BUNDLE],
         "created_at": args.created_at,
     }
+    prov_path = os.path.join(dist, PROVENANCE_ASSET)
+    if not os.path.isfile(prov_path):
+        raise v.ValidationError("release-provenance.json is mandatory")
+    with open(prov_path, "r", encoding="utf-8") as fh:
+        prov = json.load(fh)
+    emb = prov.get("embedded_msi") if isinstance(prov, dict) else None
+    if not isinstance(emb, dict) or emb.get("verified") is not True:
+        raise v.ValidationError("provenance lacks a verified embedded MSI record")
+    manifest["installer_embeds"] = {
+        "msi_sha256": v.sha256(emb.get("sha256"), "embedded msi sha256"),
+        "msi_product_version": version_text(emb.get("msi_product_version")),
+        "setup_file_version": version_text(emb.get("setup_file_version", "")),
+        "source": "release-provenance.json (upstream finalize job)",
+    }
+    if getattr(args, "meta", None):
+        with open(args.meta, "r", encoding="utf-8") as fh:
+            meta = json.load(fh)
+        sens = sanitize_sensitive(meta.get("sensitive"))
+        manifest["sensitive_paths_touched"] = sens
     if args.msi_summary:
         with open(args.msi_summary, "r", encoding="utf-8") as fh:
             summary = sanitize_msi_summary(json.load(fh))
@@ -221,10 +278,23 @@ def main(argv=None) -> int:
     g.add_argument("--groups", default="posture")
     g.add_argument("--created-at", required=True)
     g.add_argument("--msi-summary")
+    g.add_argument("--meta", help="build-meta.json (sensitive upstream paths)")
+    sl = sub.add_parser("sensitive-line")
+    sl.add_argument("--meta", required=True)
     vv = sub.add_parser("verify")
     vv.add_argument("--dist", required=True)
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "sensitive-line":
+            with open(args.meta, "r", encoding="utf-8") as fh:
+                sens = sanitize_sensitive(json.load(fh).get("sensitive"))
+            if sens["count"] == 0:
+                print("sensitive upstream paths touched: none")
+            else:
+                since = sens["since"] or "unknown"
+                print(f"SENSITIVE UPSTREAM PATHS TOUCHED since {since}: {sens['count']} file(s) "
+                      f"(gate enforced: {str(sens['enforced']).lower()}; list in manifest.json)")
+            return 0
         if args.cmd == "verify":
             problems = verify_sums(args.dist)
             if problems:

@@ -29,14 +29,17 @@ from typing import Any, Dict, List, Optional
 import vpcommon as v
 
 IN_FLIGHT = {"queued", "in_progress", "waiting", "pending", "requested"}
-MAX_ATTEMPTS = 2  # initial run + one automatic re-run, then a human looks
+# Total attempts per build branch (first run + automatic re-runs, counting the ``attempt``
+# field of every run: ``gh run rerun`` re-uses the run id and only bumps ``attempt``).
+MAX_TOTAL_ATTEMPTS = 3
+RETRYABLE = {"failure", "timed_out", "startup_failure"}
 
 
 def _published_ns(our_releases: Any, tag: str) -> List[int]:
     out: List[int] = []
     if not isinstance(our_releases, list):
         raise v.ValidationError("releases payload is not an array")
-    pat = re.compile(re.escape(tag) + r"-vp\.([0-9]{1,3})")
+    pat = re.compile(re.escape(tag) + r"-vp\.([1-9][0-9]{0,2})")
     for rel in our_releases:
         if not isinstance(rel, dict) or rel.get("draft") is not False:
             continue
@@ -47,6 +50,22 @@ def _published_ns(our_releases: Any, tag: str) -> List[int]:
         if m:
             out.append(int(m.group(1)))
     return sorted(set(out))
+
+
+def _clean(text: str, limit: int = 200) -> str:
+    """Reduce free text to the charset accepted by ``$GITHUB_OUTPUT`` writers."""
+    return re.sub(r"[^A-Za-z0-9._/@:+=, -]", " ", text)[:limit]
+
+
+def total_attempts(branch_runs: List[Dict[str, Any]]) -> int:
+    total = 0
+    for r in branch_runs:
+        try:
+            att = int(r.get("attempt") or 1)
+        except (TypeError, ValueError):
+            att = 1
+        total += max(1, min(att, 50))
+    return total
 
 
 def _runs_for(runs: Any, branch: str) -> List[Dict[str, Any]]:
@@ -89,7 +108,8 @@ def plan(*, tag: str, commit: str, lock: Dict[str, Any], our_releases: Any, runs
     result["record_lock"] = entry is None
 
     if entry is None and published and not force_rebuild:
-        result.update(reason="a release for this upstream tag exists but upstream-seen.json has no entry")
+        result.update(stuck=True,
+                      reason="a release for this upstream tag exists but upstream-seen.json has no entry - manual action required")
         return result
 
     same = [b for b in builds if b["series_sha256"] == series_sha]
@@ -103,20 +123,25 @@ def plan(*, tag: str, commit: str, lock: Dict[str, Any], our_releases: Any, runs
         if any(r.get("status") in IN_FLIGHT for r in branch_runs):
             result.update(n=latest["n"], reason="build in flight")
             return result
-        if len(branch_runs) >= MAX_ATTEMPTS:
+        attempts = total_attempts(branch_runs)
+        if attempts >= MAX_TOTAL_ATTEMPTS:
             result.update(n=latest["n"], stuck=True,
-                          reason="build failed repeatedly; manual action required")
+                          reason=f"build failed {attempts} times - manual action required")
             return result
-        failed = [r for r in branch_runs if r.get("status") == "completed"]
-        if not failed:
-            # Branch exists in the lock but no run was ever seen: the push did not
-            # trigger (or runs aged out).  Treat as stuck rather than push again.
+        completed = [r for r in branch_runs if r.get("status") == "completed"]
+        if not completed:
+            # Branch recorded but no run was ever seen: the push did not trigger (or runs aged
+            # out).  Treat as stuck rather than pushing again.
             result.update(n=latest["n"], stuck=True,
-                          reason="build branch recorded but no run found; manual action required")
+                          reason="build branch recorded but no run found - manual action required")
             return result
-        rid = max(int(r.get("databaseId", 0)) for r in failed)
-        result.update(action="rerun", n=latest["n"], rerun_run_id=rid,
-                      reason="previous attempt did not publish; re-running failed jobs")
+        last = max(completed, key=lambda r: int(r.get("databaseId", 0) or 0))
+        if last.get("conclusion") not in RETRYABLE:
+            result.update(n=latest["n"], stuck=True,
+                          reason=f"last run ended {_clean(str(last.get('conclusion')), 20)} without a release - manual action required")
+            return result
+        result.update(action="rerun", n=latest["n"], rerun_run_id=int(last.get("databaseId", 0)),
+                      reason=f"attempt {attempts} did not publish - re-running failed jobs")
         return result
 
     n = max([b["n"] for b in builds] + published + [0]) + 1
@@ -161,15 +186,15 @@ def main(argv=None) -> int:
                    series_sha=args.series_sha, hold=_bool(args.hold),
                    override_hold=_bool(args.override_hold), force_rebuild=_bool(args.force_rebuild),
                    manual_tag=_bool(args.manual_tag), pin=pin)
+        print(json.dumps(res, sort_keys=True))
+        if args.github_output:
+            v.write_outputs({"action": res["action"], "n": str(res["n"]),
+                             "reason": _clean(res["reason"]),
+                             "record_lock": "true" if res["record_lock"] else "false",
+                             "rerun_run_id": str(res["rerun_run_id"]),
+                             "stuck": "true" if res["stuck"] else "false"})
     except (v.ValidationError, OSError, json.JSONDecodeError) as exc:
         return v.fail(f"plan_build: {exc}")
-    print(json.dumps(res, sort_keys=True))
-    if args.github_output:
-        v.write_outputs({"action": res["action"], "n": str(res["n"]),
-                         "reason": res["reason"].replace("(", "").replace(")", ""),
-                         "record_lock": "true" if res["record_lock"] else "false",
-                         "rerun_run_id": str(res["rerun_run_id"]),
-                         "stuck": "true" if res["stuck"] else "false"})
     return 0
 
 

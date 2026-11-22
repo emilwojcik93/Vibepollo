@@ -3,8 +3,11 @@
 
 Given the list of files changed between the previous and the new upstream
 release, report whether any touches build/installer/driver/CI surface that
-runs as SYSTEM or executes in CI.  A non-empty match routes the release through
-the ``release-approval`` environment (required reviewer = Owner).
+runs as SYSTEM or executes in CI.  The result is ALWAYS reported (run summary, release notes
+and ``manifest.json`` key ``sensitive_paths_touched``).  Only when the repository variable
+``ENFORCE_SENSITIVE_GATE`` is ``true`` does a non-empty match route the release through the
+``release-approval`` environment (required reviewer = Owner); the default is report-only because
+the Owner wants fully automatic installs.
 
 Patterns are conservative prefixes / suffixes; extend, never loosen.
 """
@@ -17,17 +20,18 @@ from typing import Iterable, List
 import vpcommon as v
 
 PREFIXES = (
-    ".github/",
-    "packaging/windows/",
-    "cmake/packaging/",
-    "src_assets/windows/drivers/",
-    "third-party/",
-    "docs/signpath/",
-    "scripts/download_",
-    "scripts/sign",
+    ".github/", ".signpath/", "docs/signpath/",
+    "packaging/",                    # WiX, bootstrapper, installer custom actions
+    "cmake/",                        # build logic, dependency downloads, pinned artifacts
+    "src_assets/windows/",           # install-time scripts, drivers, services
+    "third-party/", "third_party/",  # pinned dependencies and submodules
+    "scripts/",                      # release / download / signing scripts
+    "src/nvhttp", "src/rtsp", "src/confighttp", "src/httpcommon", "src/stream",
+    "src/crypto", "src/network", "src/upnp", "src/webrtc",   # network listeners and crypto
 )
-EXACT = (".gitmodules",)
-SUFFIXES = ("/package-lock.json", ".wxs", ".wxi", ".wxl", ".vbs")
+EXACT = (".gitmodules", "CMakeLists.txt", "package.json", "package-lock.json", "vcpkg.json")
+SUFFIXES = ("/package.json", "/package-lock.json", "/CMakeLists.txt", ".cmake", ".wxs", ".wxi", ".wxl",
+            ".vbs", ".ps1", ".bat", ".cmd", ".inf", ".cat")
 
 
 def matches(path: str) -> bool:

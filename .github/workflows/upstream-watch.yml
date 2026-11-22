@@ -51,7 +51,7 @@ jobs:
       tag: ${{ steps.sel.outputs.tag }}
       release_id: ${{ steps.sel.outputs.release_id }}
       published_at: ${{ steps.sel.outputs.published_at }}
-      prev_tag: ${{ steps.sel.outputs.prev_tag }}
+      prev_tag: ${{ steps.base.outputs.diff_base }}
       commit: ${{ steps.deref.outputs.commit }}
       series_sha256: ${{ steps.series.outputs.series_sha256 }}
       patch_count: ${{ steps.series.outputs.patch_count }}
@@ -109,6 +109,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.sel.outputs.tag }}
         run: python3 ci/deref_commit.py --repo "$UP_REPO" --tag "$TAG" --github-output
+      - name: Diff base for the sensitive-path report (last built tag, else previous upstream release)
+        id: base
+        if: steps.sel.outputs.found == 'true'
+        env:
+          TAG: ${{ steps.sel.outputs.tag }}
+          FALLBACK: ${{ steps.sel.outputs.prev_tag }}
+        run: |
+          set -euo pipefail
+          base="$(python3 ci/lock_update.py last-built --lock upstream-seen.json --tag "$TAG")"
+          if [ -z "$base" ]; then base="$FALLBACK"; fi
+          echo "diff_base=$base" >> "$GITHUB_OUTPUT"
       - name: Fingerprint the patch series
         id: series
         if: steps.sel.outputs.found == 'true'
@@ -123,7 +134,7 @@ jobs:
           python3 ci/validate_tag.py repo-slug "$REPO"
           gh api "repos/${REPO}/releases?per_page=100" > our-releases.json
           if ! gh run list --repo "$REPO" --workflow patched-windows-release.yml --limit 100 \
-                 --json databaseId,headBranch,status,conclusion > runs.json 2> runs.err; then
+                 --json databaseId,headBranch,status,conclusion,attempt > runs.json 2> runs.err; then
             echo "::notice::no wrapper runs found yet"
             echo '[]' > runs.json
           fi
@@ -244,6 +255,7 @@ jobs:
         run: |
           set -euo pipefail
           gate=auto; count=0
+          : > sensitive.md
           if [ -n "$PREV_TAG" ]; then
             prev_commit="$(python3 auto/ci/deref_commit.py --repo "$UP_REPO" --tag "$PREV_TAG")"
             git -C src fetch -q --no-tags upstream "refs/tags/${PREV_TAG}:refs/tags/upstream-${PREV_TAG}"
@@ -251,7 +263,8 @@ jobs:
             summary_line="$(python3 auto/ci/sensitive_paths.py --names names.txt --summary sensitive.md)"
             count="${summary_line##*count=}"
             if [ "$count" != "0" ]; then
-              { echo "### Sensitive upstream paths changed since ${PREV_TAG}"; cat sensitive.md; } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::SENSITIVE upstream paths changed since ${PREV_TAG}: ${count} file(s); enforce=${ENFORCE:-false}; listed in the run summary, release notes and manifest.json"
+              { echo "### SENSITIVE upstream paths changed since ${PREV_TAG} (${count} files; enforce=${ENFORCE:-false})"; cat sensitive.md; } >> "$GITHUB_STEP_SUMMARY"
               if [ "$ENFORCE" = "true" ]; then gate=approval; fi
             fi
           fi
@@ -283,7 +296,7 @@ jobs:
           tip="$(python3 auto/ci/assemble_build.py --repo src --ci-dir auto/ci --base "$COMMIT" --tag "$TAG" \
             --n "$N" --branch "build/${TAG}-n${N}" --release-id "$RELEASE_ID" --published-at "$PUBLISHED_AT" \
             --series-sha "$SERIES_SHA" --patch-count "$PATCH_COUNT" --groups "$PATCH_GROUPS" \
-            --gate "$GATE" --sensitive-count "$SENSITIVE_COUNT" | tail -n 1)"
+            --gate "$GATE" --sensitive-count "$SENSITIVE_COUNT" --sensitive-since "$PREV_TAG"             --sensitive-file "$GITHUB_WORKSPACE/sensitive.md" | tail -n 1)"
           python3 auto/ci/validate_tag.py sha1 "$tip"
           echo "tip=$tip" >> "$GITHUB_OUTPUT"
           echo "### Build branch \`build/${TAG}-n${N}\` assembled at \`${tip}\` (dry run: ${DRY_RUN})" >> "$GITHUB_STEP_SUMMARY"
@@ -305,21 +318,7 @@ jobs:
           git config user.email "vp-automation@users.noreply.github.com"
           git add upstream-seen.json
           git commit -q -m "lock: pin upstream ${TAG} and record build n${N}"
-      - name: Push the build branch (App token; triggers patched-windows-release.yml)
-        if: env.DRY_RUN != 'true'
-        env:
-          APP_TOKEN: ${{ steps.app.outputs.token }}
-          TIP: ${{ steps.assemble.outputs.tip }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          python3 auto/ci/validate_tag.py repo-slug "$REPO"
-          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
-          echo "::add-mask::$auth"
-          # No --force: an existing branch means a collision and must fail loudly.
-          git -C src -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
-            push "https://github.com/${REPO}.git" "${TIP}:refs/heads/build/${TAG}-n${N}"
-      - name: Push the lock commit to automation
+      - name: Persist upstream-seen.json BEFORE the branch push (a failed push here fails the job and alerts)
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -337,6 +336,20 @@ jobs:
           done
           echo "::error::could not push upstream-seen.json (is the automation ruleset blocking github-actions?)"
           exit 1
+      - name: Push the build branch (App token; triggers patched-windows-release.yml)
+        if: env.DRY_RUN != 'true'
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          TIP: ${{ steps.assemble.outputs.tip }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 auto/ci/validate_tag.py repo-slug "$REPO"
+          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          # No --force: an existing branch means a collision and must fail loudly.
+          git -C src -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push "https://github.com/${REPO}.git" "${TIP}:refs/heads/build/${TAG}-n${N}"
 
   rerun:
     name: Re-run failed build

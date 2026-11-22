@@ -26,6 +26,7 @@ from typing import Any, Dict, List
 
 import apply_series as ap_mod
 import vpcommon as v
+import workflow_check
 
 KEEP_WORKFLOWS = {"ci-windows.yml"}
 WRAPPER_NAME = "patched-windows-release.yml"
@@ -60,6 +61,24 @@ def strip_workflows(repo: str) -> List[str]:
     return removed
 
 
+def sensitive_block(args: argparse.Namespace) -> Dict[str, Any]:
+    """Sanitized list of sensitive upstream paths touched since the previous release."""
+    paths: List[str] = []
+    if getattr(args, "sensitive_file", ""):
+        with open(args.sensitive_file, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                p = line.strip()
+                if p.startswith("- `") and p.endswith("`"):
+                    p = p[3:-1]
+                if p and not p.startswith("- ..."):
+                    paths.append("".join(c if 32 <= ord(c) < 127 else "?" for c in p)[:200])
+    since = getattr(args, "sensitive_since", "") or ""
+    if since:
+        v.upstream_tag(since)
+    return {"since": since, "count": int(args.sensitive_count), "paths": paths[:50],
+            "enforced": args.gate == "approval"}
+
+
 def build_meta(args: argparse.Namespace, patch_commits: int) -> Dict[str, Any]:
     import version_map
 
@@ -78,6 +97,7 @@ def build_meta(args: argparse.Namespace, patch_commits: int) -> Dict[str, Any]:
         "patch_commits": patch_commits,
         "gate": args.gate,
         "sensitive_count": int(args.sensitive_count),
+        "sensitive": sensitive_block(args),
     }
 
 
@@ -91,6 +111,10 @@ def assemble(args: argparse.Namespace) -> int:
         return v.fail("patch series touches protected paths: " + ", ".join(bad[:5]))
     patch_commits = int(ap_mod.git(repo, "rev-list", "--count", f"{args.base}..HEAD").stdout.strip())
 
+    upstream_wf = os.path.join(repo, ".github", "workflows", "ci-windows.yml")
+    if not os.path.isfile(upstream_wf):
+        return v.fail("upstream ci-windows.yml is missing")
+    workflow_check.require_workflow_call_only(upstream_wf)  # fail closed on new triggers
     strip_workflows(repo)
     wf_dir = os.path.join(repo, ".github", "workflows")
     os.makedirs(wf_dir, exist_ok=True)
@@ -141,6 +165,8 @@ def main(argv=None) -> int:
     ap.add_argument("--groups", default="posture")
     ap.add_argument("--gate", default="auto")
     ap.add_argument("--sensitive-count", default="0")
+    ap.add_argument("--sensitive-file", default="", help="file listing sensitive upstream paths (one per line)")
+    ap.add_argument("--sensitive-since", default="", help="previous upstream tag the diff was taken against")
     ap.add_argument("--trial", action="store_true")
     args = ap.parse_args(argv)
     try:
