@@ -9,8 +9,8 @@ upstream:
   commit_date: 2026-11-21T19:29:39-06:00
   release_id: null   # filled in by the upstream-watch workflow (Phase 2)
 patch_series:
-  count: 9
-  sha256: fd06dfd007ce8e0b800e3d72df2f5f8a600d7a705675f63ed31527e81b003753   # sha256 of patches/series followed by every patch in order (tools/series-sha.sh)
-  result_tree: 9132c484c39db62a4a1c89d53ee76f3b9825c116         # tree of <tag> + series; must equal the reference tree
-  reference: 1591d2c95
+  count: 8
+  patch_series_sha256: 93b5e40bc1b3ed563a9a4dbe2d46229aedb24d0f1152bc475118430f13de75b8   # sha256 of patches/series (LF) followed by every patch in order, see tools/series-sha.sh
+  result_tree: 37b3569f00c79532f7d86b6ab8d8d827cd4d5ab3         # tree of <tag> + series; must equal the reference tree
+  reference: e666fdc02daf2458e7a1f127ab2daa0215896e92
 locked_on: 2026-11-22

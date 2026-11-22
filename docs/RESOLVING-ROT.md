@@ -7,7 +7,7 @@ no release is built, the last good release stays current. This is the manual fix
 
 ```bash
 git fetch --tags upstream                      # latest upstream tags
-tools/apply-series.sh <new-tag>                # prints: FAIL patch=N/9 name=... conflicts=file1,file2
+tools/apply-series.sh <new-tag>                # prints: FAIL patch=N/M name=... conflicts=file1,file2
 tools/rot-matrix.sh 5                          # how far back does it still apply?
 ```
 

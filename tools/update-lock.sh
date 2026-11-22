@@ -42,7 +42,7 @@ upstream:
   release_id: $release_id   # filled in by the upstream-watch workflow (Phase 2)
 patch_series:
   count: $count
-  sha256: $("$script_dir/series-sha.sh")   # sha256 of patches/series followed by every patch in order (tools/series-sha.sh)
+  patch_series_sha256: $("$script_dir/series-sha.sh")   # sha256 of patches/series (LF) followed by every patch in order, see tools/series-sha.sh
   result_tree: $tree         # tree of <tag> + series; must equal the reference tree
   reference: ${reference:-null}
 locked_on: $(date -u +%Y-%m-%d)

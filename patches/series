@@ -9,5 +9,3 @@
 0006-virtual-display-hand-the-posture-size-to-the-driver-.patch
 0007-web-ui-expose-the-posture-settings.patch
 0008-docs-document-touch-posture-and-add-a-tablet-switch-.patch
-# Cosmetic, unrelated to posture: kept only so the result is tree-identical to the reference branch (see its commit message).
-0009-tools-drop-a-stray-blank-line-in-CMakeLists.txt.patch

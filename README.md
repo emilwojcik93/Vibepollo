@@ -13,7 +13,7 @@ the Xbox full screen experience. Contract and options: `docs/touch-posture.md` (
 
 ```
 patches/series        ordered list of patch files ('#' comments allowed)
-patches/0001..0009    git format-patch files, applied with git am --3way
+patches/0001..0008    git format-patch files, applied with git am --3way
 upstream.lock         pinned upstream tag + commit + series hash + resulting tree (tools/update-lock.sh writes it)
 policy.yml            allowlisted owners, cooling-off, hold switch, channels, retention
 tools/apply-series.sh   apply the series onto an upstream ref in a temp worktree, optionally verify the tree
@@ -25,7 +25,7 @@ docs/RESOLVING-ROT.md   what to do when the series stops applying to a new upstr
 docs/ROT-MATRIX-*.md    recorded rot matrix runs
 ```
 
-## The series (applies onto 2.20.0, result tree `9132c484c39db62a4a1c89d53ee76f3b9825c116`)
+## The series (applies onto 2.20.0, result tree `37b3569f00c79532f7d86b6ab8d8d827cd4d5ab3` = reference commit `e666fdc02`)
 
 | # | Subject | What it adds |
 |---|---|---|
@@ -37,12 +37,11 @@ docs/ROT-MATRIX-*.md    recorded rot matrix runs
 | 0006 | virtual display: hand the posture size to the driver and recreate on resume | display backends, resume recreation |
 | 0007 | web ui: expose the posture settings | settings page, device editor, locales |
 | 0008 | docs: document touch posture and add a tablet-switch simulator | docs, `scripts/sim-tablet-switch.py` |
-| 0009 | tools: drop a stray blank line in CMakeLists.txt | cosmetic; only for tree identity with the reference |
 
-Every patch carries its rationale in the commit message. Patches 0001 to 0006 are ordered so that each one only uses
+Every patch carries its rationale in the commit message. Patches 0001 to 0007 are ordered so that each one only uses
 symbols and files from earlier patches, and each patch adds its own CMake source-list lines. Compiling every
-intermediate step has not been verified (no toolchain on the authoring machine); the final result is identical to
-the reference branch.
+intermediate step has not been verified (no toolchain on the authoring machine; `--prefix-check` below lets CI do
+it); the final result is identical to the reference branch `feature/stream-posture-2.20`.
 
 ## Use
 
@@ -56,9 +55,15 @@ tools/apply-series.sh 2.20.0 --verify 1591d2c95
 tools/apply-series.sh 2.20.0 --branch build/2.20.0-n1
 # does the series still apply to the last 5 upstream releases?
 tools/rot-matrix.sh 5
+# patch-by-patch: prints "PREFIX k/N <patch> OK commit=<sha> tree=<tree>" per prefix and stops at the first prefix that
+# fails; CI can build each printed commit. rot-matrix.sh --prefix-check adds a "Prefixes" column (k/N) per tag.
+tools/apply-series.sh 2.20.0 --prefix-check --branch build/2.20.0-n1
+# machine-readable result for CI (key=value lines: status, ref, commit, patch, patch_name, patches_total, prefixes_ok,
+# conflicts, tree, verify); status is ok | fail | verify_failed | error
+tools/apply-series.sh 2.20.1 --report result.txt
 ```
 
-`apply-series.sh` exit codes: 0 ok, 1 a patch failed (prints `FAIL patch=... conflicts=...`), 2 `--verify` tree
+`apply-series.sh` exit codes: 0 ok, 1 a patch failed (prints `FAIL ... patch=N/M name=... conflicts=a,b`), 2 `--verify` tree
 mismatch, 3 usage or environment error. It never touches existing branches; on failure the temporary worktree is
 removed and nothing is left behind. It always applies with `git am --3way --keep-cr` and `core.autocrlf=false`, so the
 result does not depend on the OS or the user's git config. The `patches/` files are marked `-text` in
@@ -91,8 +96,18 @@ before a release is built or deployed (24 h), the `hold` switch (true stops new 
 the canary and stable channels, and how many releases are kept for rollback (10). The scripts here do not read it
 yet; the Phase 2 workflows will.
 
+Authorship: every patch is authored `emilwojcik93 <adminit@adar.pl>`; keep that when adding patches.
+
+## Series hash (`patch_series_sha256`)
+
+Defined once, in `tools/series-sha.sh`, and identical in every repository that uses this scheme (also the moonlight-qt
+one): sha256 over the bytes of `patches/series` (CRLF normalised to LF) followed by the bytes of each patch file listed
+in it (comments and blank lines in the series ignored), in series order, patch files exactly as stored.
+Equivalent: `{ tr -d '' < patches/series; for p in <listed patches in order>; do cat patches/$p; done; } | sha256sum`.
+
 ## upstream.lock
 
-Records the exact upstream tag, the dereferenced commit, the series hash (`sha256` over `patches/series` followed by
-every patch in order, `tools/series-sha.sh`), and the resulting tree. If a recorded tag later resolves to another
+Records the exact upstream tag, the dereferenced commit, the series hash (`patch_series_sha256`), the reference commit
+and the resulting tree. The pin is only moved by `tools/update-lock.sh <tag>`; a newer upstream release that also
+applies cleanly (check with `tools/rot-matrix.sh`) does not change it. If a recorded tag later resolves to another
 commit, something is wrong upstream and the pipeline must halt rather than build.
