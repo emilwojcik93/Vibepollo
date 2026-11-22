@@ -1,0 +1,29 @@
+{
+  "build": {
+    "branch": "ci-trial/2.20.0-n0",
+    "msi_product_version": "2.20.101.0",
+    "n": 1,
+    "release_tag": "2.20.0-vp.1",
+    "trial": true,
+    "version": "2.20.1-alpha.1"
+  },
+  "gate": "auto",
+  "patch_commits": 1,
+  "patches": {
+    "count": 1,
+    "groups": [
+      "posture"
+    ],
+    "series_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "schema": 1,
+  "sensitive_count": 0,
+  "upstream": {
+    "commit": "2b0608e244d9e4c83d17c37338184a08c2c620f8",
+    "owner": "Nonary",
+    "published_at": "2026-11-22T06:38:51Z",
+    "release_id": 1,
+    "repo": "Vibepollo",
+    "tag": "2.20.0"
+  }
+}
