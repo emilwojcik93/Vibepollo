@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from typing import List, Optional
@@ -95,9 +96,18 @@ def apply(repo: str, base: str, series_path: str, patches_dir: str,
                    env=env, check=False)
         if proc.returncode != 0:
             report = conflict_report(repo, name, applied, proc.stderr + proc.stdout)
-            git(repo, "am", "--abort", check=False)
+            abort = git(repo, "am", "--abort", check=False)
+            if abort.returncode != 0:
+                detail = " ".join(abort.stderr.split())[:300]
+                print("::warning::git am --abort failed: " + detail, file=sys.stderr)
             git(repo, "reset", "--hard", base, check=False)
             git(repo, "clean", "-fdq", check=False)
+            # Belt and braces: a leftover rebase-apply directory would break the next run.
+            leftover = git(repo, "rev-parse", "--git-path", "rebase-apply", check=False).stdout.strip()
+            if leftover:
+                leftover = leftover if os.path.isabs(leftover) else os.path.join(repo, leftover)
+                if os.path.isdir(leftover):
+                    shutil.rmtree(leftover, ignore_errors=True)
             if report_path:
                 with open(report_path, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(report)
