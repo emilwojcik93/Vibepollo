@@ -556,6 +556,9 @@ namespace config {
 
   int parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+#ifdef _WIN32
+  bool vulkan_hdr_layer_preference(std::string_view file_content);
+#endif
 
   /**
    * Merge one raw configuration layer into another while treating the Windows
@@ -606,13 +609,17 @@ namespace config {
 
   void set_runtime_output_name_override(std::optional<std::string> output_name);
   std::optional<std::string> runtime_output_name_override();
+  /** Connector claimed by the exclusive Linux game that owns the current output override. */
+  std::optional<std::string> exclusive_private_capture_output();
   std::string get_active_output_name();
 
   // A recovery worker can publish a temporary virtual-output override.  The
   // lease makes rollback conditional so an older recovery cannot erase an
   // override installed by a newer session.
   using runtime_output_override_lease_t = std::uint64_t;
-  runtime_output_override_lease_t set_runtime_output_name_override_with_lease(std::string output_name);
+  runtime_output_override_lease_t set_runtime_output_name_override_with_lease(std::string output_name, std::optional<std::string> exclusive_private_capture = std::nullopt);
+  // Only a retained private selection can be replaced on physical resume.
+  runtime_output_override_lease_t replace_retained_private_capture(std::optional<std::string> physical_output);
   bool clear_runtime_output_name_override_if_lease(runtime_output_override_lease_t lease);
 
 #ifdef _WIN32

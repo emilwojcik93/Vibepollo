@@ -10,6 +10,7 @@
 #include <functional>
 #include <cstdint>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -32,6 +33,14 @@ using namespace std::chrono_literals;
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
  */
+namespace audio {
+  class display_change_hold_t;
+}
+
+namespace rtsp_stream {
+  struct launch_session_t;
+}
+
 namespace nvhttp {
 
   using args_t = SimpleWeb::CaseInsensitiveMultimap;
@@ -91,7 +100,11 @@ namespace nvhttp {
   // Remote Input has no retained resource; its catalogue ownership ends with
   // the exact transport generation that created it.
   void notify_remote_input_transport_lost(std::string_view client_uuid, std::uint64_t generation);
-  void notify_remote_monitor_released(std::string_view client_uuid, std::uint64_t generation);
+  bool can_start_remote_monitor(std::string_view client_uuid, std::uint64_t generation, bool session_ids);
+  void notify_remote_monitor_started(std::string_view client_uuid, std::uint64_t generation, bool session_ids);
+  void notify_remote_monitor_stopping(std::string_view client_uuid, std::uint64_t generation);
+  // Called under the lifecycle gate after capture drains, or for unpublished startup.
+  bool end_remote_monitor_transport(std::string_view client_uuid, std::uint64_t generation, std::string_view release_reason = {});
   void reconcile_remote_monitor_owners();
   // Conservative ownership observation for automatic display recovery. Call
   // under stream_lifecycle_mutex() so a fresh remote-role launch cannot enter
@@ -313,6 +326,14 @@ namespace nvhttp {
    * publication; final teardown holds it through its shared cleanup decision.
    */
   std::mutex &stream_lifecycle_mutex();
+#ifdef _WIN32
+  // Called under stream_lifecycle_mutex(), before publishing a WebRTC owner.
+  bool recover_capture_display_for_webrtc(
+    const std::shared_ptr<rtsp_stream::launch_session_t> &session,
+    audio::display_change_hold_t &audio_hold
+  );
+  void rollback_capture_display_recovery(const std::shared_ptr<rtsp_stream::launch_session_t> &session);
+#endif
 
 #ifdef _WIN32
   /** End all transports, pending launches and the app, then restore displays.

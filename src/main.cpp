@@ -875,12 +875,9 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef _WIN32
-  // Reconcile the Vulkan HDR implicit-layer registration with the configured preference. This makes
-  // the Web UI toggle authoritative over the installer's unconditional registration and self-heals
-  // when the installer's (now best-effort) registration was skipped or failed. Only attempt when
-  // running as SYSTEM, since it writes HKLM; the call short-circuits when already in the desired state.
-  if (platf::is_running_as_system()) {
-    platf::set_vulkan_hdr_layer_enabled(config::video.dd.vulkan_hdr_layer);
+  // The service owns the machine-wide registration and applies the saved preference.
+  if (platf::is_running_as_system() && !platf::set_vulkan_hdr_layer_enabled(config::video.dd.vulkan_hdr_layer)) {
+    BOOST_LOG(warning) << "Could not apply the Vulkan HDR layer setting to the Windows registry.";
   }
 #endif
 
@@ -969,7 +966,7 @@ int main(int argc, char *argv[]) {
 
       VDISPLAY::ensure_display_result encoder_probe_display_result {};
       if (config::video.virtual_display_mode != config::video_t::virtual_display_mode_e::disabled) {
-        encoder_probe_display_result = VDISPLAY::ensure_display(required_adapter_luid);
+        encoder_probe_display_result = VDISPLAY::ensure_display(required_adapter_luid, true);
       }
       auto cleanup_encoder_probe_display = util::fail_guard([&encoder_probe_display_result]() {
         VDISPLAY::cleanup_ensure_display(encoder_probe_display_result);
