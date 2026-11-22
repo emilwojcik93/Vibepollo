@@ -329,7 +329,7 @@ jobs:
           auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
           cd auto
-          for attempt in 1 2 3; do
+          for _ in 1 2 3; do
             if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
                  push "https://github.com/${REPO}.git" HEAD:refs/heads/automation; then exit 0; fi
             git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
