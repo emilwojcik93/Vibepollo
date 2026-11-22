@@ -74,6 +74,7 @@
 #include "remote_monitor_profile_policy.h"
 #include "platform/common.h"
 #include "rtsp.h"
+#include "tablet_posture.h"
 #include "session_history.h"
 #include "stream.h"
 #include "host_stats.h"
@@ -2780,6 +2781,89 @@ namespace confighttp {
     // The list changes immediately after pair/unpair. Avoid serving an old empty
     // list from an HTTP cache after the client state has changed.
     send_response(response, output_tree, "no-store");
+  }
+
+  /**
+   * @brief Windows laptop/slate (tablet) state the host reports, with the clients behind it.
+   *
+   * @api_examples{/api/tablet-posture| GET| null}
+   */
+  void getTabletPosture(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto name = [](tablet_posture::state_e state) {
+      return state == tablet_posture::state_e::slate ? "slate" : "laptop";
+    };
+    const auto mode_name = [](tablet_posture::client_mode_e mode) {
+      switch (mode) {
+        case tablet_posture::client_mode_e::tablet:
+          return "tablet";
+        case tablet_posture::client_mode_e::handheld:
+          return "handheld";
+        case tablet_posture::client_mode_e::desktop:
+          break;
+      }
+      return "desktop";
+    };
+    const auto status = tablet_posture::status();
+    nlohmann::json output_tree;
+    output_tree["enabled"] = status.enabled;
+    output_tree["applied"] = name(status.applied);
+    output_tree["wanted"] = name(status.wanted);
+    output_tree["mode"] = mode_name(status.wanted_mode);
+    output_tree["gaming"] = status.gaming_applied;
+    output_tree["override"] = status.override_state ? nlohmann::json(name(*status.override_state)) : nlohmann::json(nullptr);
+    output_tree["clients"] = nlohmann::json::array();
+    for (const auto &client : status.clients) {
+      output_tree["clients"].push_back({{"id", client.id}, {"sessions", client.sessions}, {"touch_primary", client.mode != tablet_posture::client_mode_e::desktop}, {"mode", mode_name(client.mode)}});
+    }
+    output_tree["status"] = true;
+    send_response(response, output_tree, "no-store");
+  }
+
+  /**
+   * @brief Simulate the keyboard being detached (`slate` or `tablet`) or attached (`laptop`), force the handheld mode (`handheld`), or give control back to the clients (`auto`).
+   *
+   * @api_examples{/api/tablet-posture| POST| {"mode": "slate"}}
+   */
+  void postTabletPosture(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      std::stringstream ss;
+      ss << request->content.rdbuf();
+      const auto input_tree = nlohmann::json::parse(ss.str());
+      if (!input_tree.contains("mode") || !input_tree["mode"].is_string()) {
+        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
+        return;
+      }
+      const auto mode = input_tree["mode"].get<std::string>();
+      if (mode == "slate") {
+        tablet_posture::set_override(tablet_posture::client_mode_e::tablet);
+      } else if (mode == "laptop") {
+        tablet_posture::set_override(tablet_posture::client_mode_e::desktop);
+      } else if (mode == "handheld") {
+        tablet_posture::set_override(tablet_posture::client_mode_e::handheld);
+      } else if (mode == "auto") {
+        tablet_posture::set_override(std::nullopt);
+      } else {
+        bad_request(response, request, "mode must be \"slate\", \"laptop\", \"handheld\" or \"auto\"");
+        return;
+      }
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
   }
 
   void refresh_remote_display_physical_baseline() {
@@ -6564,6 +6648,8 @@ namespace confighttp {
     register_api_route("^/api/apps/([0-9]+)$", "DELETE", deleteApp);
     register_api_route("^/api/clients/unpair-all$", "POST", unpairAll);
     register_api_route("^/api/clients/list$", "GET", getClients);
+    register_api_route("^/api/tablet-posture$", "GET", getTabletPosture);
+    register_api_route("^/api/tablet-posture$", "POST", postTabletPosture);
     register_blocking_api_route("^/api/clients/display-layout$", "GET", getClientDisplayLayout);
     register_blocking_api_route("^/api/clients/display-layout$", "PUT", putClientDisplayLayout);
     register_api_route("^/api/clients/hdr-profiles$", "GET", getHdrProfiles);
