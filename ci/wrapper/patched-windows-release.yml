@@ -319,6 +319,11 @@ jobs:
               sleep 15
             done
             [ "$ok" = 1 ] || { echo "::error::attestation for $f does not verify"; exit 1; }
+            # Offline mode (CONTRACT 3b, Ally SYSTEM task): no token, bundle from the release.
+            env -u GH_TOKEN -u GITHUB_TOKEN gh attestation verify "dist/$f" --bundle dist/attestation.sigstore.json \
+              --repo "$REPO" --signer-workflow "$REPO/.github/workflows/patched-windows-release.yml" \
+              --source-ref "$SOURCE_REF" --deny-self-hosted-runners \
+              || { echo "::error::offline bundle verification of $f failed"; exit 1; }
           done
       - name: Create DRAFT release and upload every asset
         if: steps.existing.outputs.state != 'published'
@@ -383,6 +388,9 @@ jobs:
           done
           [ "$ok" = 1 ] || { echo "::error::release is NOT verifiable: enable immutable releases in repository settings (consumers fail closed until then)"; exit 1; }
           gh release verify-asset "$TAG" dist/VibepolloSetup.exe --repo "$REPO"
+          # CONTRACT 3b: offline consumers rely on the API field immutable == true.
+          imm="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.immutable')"
+          [ "$imm" = "true" ] || { echo "::error::release API reports immutable=${imm}; enable immutable releases"; exit 1; }
 
   notify:
     name: Alert
