@@ -140,6 +140,39 @@ def sanitize_sensitive(block: Any) -> Dict[str, Any]:
     return {"since": since, "count": count, "paths": list(paths), "enforced": enforced}
 
 
+def expected_release_assets(dist: str) -> List[str]:
+    """Every file that must be uploaded: manifest.assets + SHA256SUMS + manifest.json + the bundle."""
+    with open(os.path.join(dist, "manifest.json"), "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    names = {a["name"] for a in manifest["assets"]}
+    names |= {"SHA256SUMS", "manifest.json", BUNDLE}
+    for n in names:
+        v.require(v.ASSET_NAME_RE, n, "asset name")
+    return sorted(names)
+
+
+def check_asset_set(dist: str) -> List[str]:
+    """Fail closed (immutable releases cannot be repaired): the files in ``dist``, the manifest asset list and
+    SHA256SUMS must describe exactly the same set.  Returns the sorted upload list."""
+    expected = expected_release_assets(dist)
+    present = sorted(n for n in os.listdir(dist) if os.path.isfile(os.path.join(dist, n)))
+    if present != expected:
+        extra = sorted(set(present) - set(expected))
+        missing = sorted(set(expected) - set(present))
+        raise v.ValidationError(f"dist differs from manifest assets: extra={extra} missing={missing}")
+    with open(os.path.join(dist, "manifest.json"), "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    want_sums = sorted({a["name"] for a in manifest["assets"]} | {"manifest.json"})
+    with open(os.path.join(dist, "SHA256SUMS"), "r", encoding="ascii") as fh:
+        got_sums = sorted(ln.split("  ", 1)[1] for ln in fh.read().splitlines() if ln)
+    if got_sums != want_sums:
+        raise v.ValidationError("SHA256SUMS does not list exactly the manifest assets plus manifest.json")
+    problems = verify_sums(dist)
+    if problems:
+        raise v.ValidationError("SHA256SUMS verification failed: " + "; ".join(problems[:3]))
+    return expected
+
+
 def validate_manifest(m: Dict[str, Any]) -> None:
     """Strict schema-1 validation (raises ``ValidationError``)."""
     if m.get("schema") != 1 or m.get("product") != "vibepollo":
@@ -279,12 +312,18 @@ def main(argv=None) -> int:
     g.add_argument("--created-at", required=True)
     g.add_argument("--msi-summary")
     g.add_argument("--meta", help="build-meta.json (sensitive upstream paths)")
+    al = sub.add_parser("assets-list")
+    al.add_argument("--dist", required=True)
     sl = sub.add_parser("sensitive-line")
     sl.add_argument("--meta", required=True)
     vv = sub.add_parser("verify")
     vv.add_argument("--dist", required=True)
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "assets-list":
+            for name in check_asset_set(args.dist):
+                print(name)
+            return 0
         if args.cmd == "sensitive-line":
             with open(args.meta, "r", encoding="utf-8") as fh:
                 sens = sanitize_sensitive(json.load(fh).get("sensitive"))
