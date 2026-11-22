@@ -1,0 +1,37 @@
+{
+  "build": {
+    "branch": "build/2.20.1-n2",
+    "msi_product_version": "2.20.202.0",
+    "n": 2,
+    "release_tag": "2.20.1-vp.2",
+    "trial": false,
+    "version": "2.20.2-alpha.2"
+  },
+  "gate": "auto",
+  "patch_commits": 8,
+  "patches": {
+    "count": 8,
+    "groups": [
+      "posture"
+    ],
+    "series_sha256": "93b5e40bc1b3ed563a9a4dbe2d46229aedb24d0f1152bc475118430f13de75b8"
+  },
+  "schema": 1,
+  "sensitive": {
+    "count": 1,
+    "enforced": false,
+    "paths": [
+      "src/stream.cpp"
+    ],
+    "since": "2.20.0"
+  },
+  "sensitive_count": 1,
+  "upstream": {
+    "commit": "0f80298bc19246fb71b46c8d7d1c3464724ea27d",
+    "owner": "Nonary",
+    "published_at": "2026-11-22T18:08:58Z",
+    "release_id": 454644848,
+    "repo": "Vibepollo",
+    "tag": "2.20.1"
+  }
+}
